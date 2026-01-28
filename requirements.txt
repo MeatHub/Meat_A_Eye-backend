@@ -1,0 +1,23 @@
+# Meat-A-Eye Backend (FastAPI + MySQL)
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+
+# DB
+sqlalchemy[asyncio]>=2.0.25
+aiomysql>=0.2.0
+pymysql>=1.1.0
+
+# Auth
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# HTTP & External API
+httpx>=0.26.0
+
+# Env & validation
+pydantic-settings>=2.1.0
+email-validator>=2.1.0
+
+# Optional: Web Push (VAPID)
+pywebpush>=1.14.0
