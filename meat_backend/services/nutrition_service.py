@@ -5,35 +5,13 @@ from typing import Any
 import httpx
 
 from ..config.settings import settings
+from ..services.data_mapper import map_ai_class_to_keywords
+from ..constants.meat_data import get_nutrition_fallback
 
 logger = logging.getLogger(__name__)
 
 # 식품의약품안전처 영양정보 API (실제 엔드포인트는 API 문서 기준)
 NUTRITION_API_BASE = "https://www.foodsafetykorea.go.kr/api"
-
-# AI 부위명 → API 검색어 매핑
-PART_NAME_MAPPING = {
-    # 소고기
-    "Beef_Tenderloin": ["소고기", "안심", "생것"],
-    "Beef_Ribeye": ["소고기", "등심", "생것"],
-    "Beef_Sirloin": ["소고기", "채끝살", "생것"],
-    "Beef_Chuck": ["소고기", "목심", "생것"],
-    "Beef_Brisket": ["소고기", "양지", "생것"],
-    "Beef_Shank": ["소고기", "사태", "생것"],
-    "Beef_BottomRound": ["소고기", "우둔", "생것"],
-    "Beef_TopRound": ["소고기", "설도", "생것"],
-    # 돼지고기
-    "Pork_Belly": ["돼지고기", "삼겹살", "생것"],
-    "Pork_Loin": ["돼지고기", "목살", "생것"],
-    "Pork_Shoulder": ["돼지고기", "앞다리", "생것"],
-    "Pork_Ham": ["돼지고기", "뒷다리", "생것"],
-    "Pork_Neck": ["돼지고기", "목살", "생것"],
-    # 한글 부위명도 지원
-    "한우 안심": ["소고기", "안심", "생것"],
-    "한우 등심": ["소고기", "등심", "생것"],
-    "삼겹살": ["돼지고기", "삼겹살", "생것"],
-    "목살": ["돼지고기", "목살", "생것"],
-}
 
 
 class NutritionService:
@@ -44,18 +22,7 @@ class NutritionService:
 
     def _map_part_name_to_keywords(self, part_name: str) -> list[str]:
         """AI 부위명을 API 검색 키워드로 매핑."""
-        # 정확한 매칭
-        if part_name in PART_NAME_MAPPING:
-            return PART_NAME_MAPPING[part_name]
-        
-        # 부분 매칭
-        part_lower = part_name.lower()
-        for key, keywords in PART_NAME_MAPPING.items():
-            if any(kw.lower() in part_lower for kw in keywords):
-                return keywords
-        
-        # 기본값: 부위명을 그대로 사용
-        return [part_name, "생것"]
+        return map_ai_class_to_keywords(part_name)
 
     async def fetch_nutrition(self, part_name: str) -> dict[str, Any]:
         """
@@ -74,13 +41,14 @@ class NutritionService:
         search_query = " ".join(keywords)
         
         if not self.api_key:
-            logger.warning("Safe Food API key not set, returning default values")
+            logger.warning(f"Safe Food API key not set, using Fallback data: {part_name}")
+            fallback_data = get_nutrition_fallback(part_name)
             return {
-                "calories": None,
-                "protein": None,
-                "fat": None,
-                "carbohydrate": None,
-                "source": "default",
+                "calories": fallback_data.get("calories"),
+                "protein": fallback_data.get("protein"),
+                "fat": fallback_data.get("fat"),
+                "carbohydrate": fallback_data.get("carbohydrate"),
+                "source": "fallback",
             }
         
         try:
@@ -128,12 +96,14 @@ class NutritionService:
                 "source": "api",
             }
         
-        # 기본값 반환 (실제 데이터가 없을 경우)
+        # Fallback: constants/meat_data.py의 평균값 사용
+        logger.warning(f"영양정보 API 조회 실패, Fallback 데이터 사용: {part_name}")
+        fallback_data = get_nutrition_fallback(part_name)
         return {
-            "calories": None,
-            "protein": None,
-            "fat": None,
-            "carbohydrate": None,
-            "source": "not_found",
+            "calories": fallback_data.get("calories"),
+            "protein": fallback_data.get("protein"),
+            "fat": fallback_data.get("fat"),
+            "carbohydrate": fallback_data.get("carbohydrate"),
+            "source": "fallback",
         }
 

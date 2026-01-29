@@ -32,22 +32,39 @@ ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 logger = logging.getLogger(__name__)
 
-# Mock 응답 모드 (환경 변수로 제어)
-USE_MOCK_RESPONSE = settings.debug  # 개발 모드에서만 Mock 사용
+# Mock 응답 모드 (AI 서버가 없을 때 항상 사용)
+USE_MOCK_RESPONSE = True  # AI 서버 오프라인 상태이므로 항상 Mock 사용
 
 
 def get_mock_response() -> dict:
     """Mock API 응답 (AI 서버가 없을 때 사용)."""
+    import random
+    
+    # 다양한 Mock 데이터 중 랜덤 선택
+    mock_parts = [
+        {"part": "Beef_Tenderloin", "name": "한우 안심", "confidence": 0.98},
+        {"part": "Beef_Ribeye", "name": "한우 등심", "confidence": 0.95},
+        {"part": "Beef_Sirloin", "name": "한우 채끝살", "confidence": 0.92},
+        {"part": "Pork_Belly", "name": "삼겹살", "confidence": 0.94},
+        {"part": "Pork_Loin", "name": "목살", "confidence": 0.91},
+    ]
+    
+    selected = random.choice(mock_parts)
+    trace_number = f"002{random.randint(100000000, 999999999)}"
+    
     return {
-        "partName": "Beef_Ribeye",
-        "confidence": 0.95,
-        "historyNo": "TRACE123456789",
+        "partName": selected["part"],
+        "confidence": selected["confidence"],
+        "historyNo": trace_number,
         "raw": {
             "status": "success",
             "data": {
-                "category": "Beef_Ribeye",
-                "probability": 95.0,
-                "is_valid": True
+                "category": selected["part"],
+                "category_kr": selected["name"],
+                "probability": selected["confidence"] * 100,
+                "is_valid": True,
+                "part": selected["part"],  # Phase 5 요구사항
+                "trace_number": trace_number,
             }
         }
     }
@@ -76,15 +93,50 @@ async def api_analyze(
     - 인증이 없어도 사용 가능 (게스트 모드)
     - Mock 응답 모드 지원 (개발 환경)
     """
-    # Mock 응답 모드 (개발 환경)
-    if USE_MOCK_RESPONSE and not settings.ai_server_url:
-        logger.info("Mock 응답 모드 사용")
+    # Mock 응답 모드 (AI 서버가 없을 때)
+    # AI 서버 URL이 없거나 Mock 모드가 활성화된 경우
+    if not settings.ai_server_url or USE_MOCK_RESPONSE:
+        logger.info("Mock 응답 모드 사용 (AI 서버 오프라인)")
         mock_data = get_mock_response()
+        
+        # 영양정보 및 가격정보 조회
+        nutrition_info = None
+        price_info = None
+        if mock_data["partName"]:
+            try:
+                nutrition_data = await nutrition_service.fetch_nutrition(mock_data["partName"])
+                nutrition_info = NutritionInfo(
+                    calories=nutrition_data.get("calories"),
+                    protein=nutrition_data.get("protein"),
+                    fat=nutrition_data.get("fat"),
+                    carbohydrate=nutrition_data.get("carbohydrate"),
+                )
+            except Exception as e:
+                logger.exception(f"Mock 모드 영양정보 조회 실패: {e}")
+
+            try:
+                price_data = await price_service.fetch_current_price(
+                    part_name=mock_data["partName"],
+                    region="seoul",
+                    db=db,
+                )
+                price_info = PriceInfo(
+                    currentPrice=price_data.get("currentPrice", 0),
+                    priceUnit=price_data.get("unit", "100g"),
+                    priceTrend=price_data.get("trend", "flat"),
+                    priceDate=price_data.get("price_date"),
+                    priceSource=price_data.get("source", "fallback"),
+                )
+            except Exception as e:
+                logger.exception(f"Mock 모드 가격정보 조회 실패: {e}")
+        
         return AIAnalyzeResponse(
             partName=mock_data["partName"],
             confidence=mock_data["confidence"],
             historyNo=mock_data["historyNo"],
             raw=mock_data["raw"],
+            nutrition=nutrition_info,
+            price=price_info,
         )
     
     # 이미지 검증

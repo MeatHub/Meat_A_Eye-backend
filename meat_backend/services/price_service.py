@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config.database import get_db
 from ..models.market_price import MarketPrice
+from ..constants.meat_data import get_price_fallback
 from .kamis import KamisService
 
 logger = logging.getLogger(__name__)
@@ -69,10 +70,11 @@ class PriceService:
                     "source": "cache",
                 }
 
-        # 3. Fallback: 기본값 반환
-        logger.warning(f"No price data found for {part_name} in {region}")
+        # 3. Fallback: constants/meat_data.py의 평균값 사용
+        logger.warning(f"가격정보 조회 실패, Fallback 데이터 사용: {part_name}")
+        fallback_price = get_price_fallback(part_name)
         return {
-            "currentPrice": 0,
+            "currentPrice": fallback_price,
             "unit": "100g",
             "trend": "flat",
             "price_date": str(today),
