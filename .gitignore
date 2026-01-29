@@ -1,0 +1,58 @@
+# ==============================
+# Python Virtual Environment
+# ==============================
+.venv/
+venv/
+**/venv/
+**/.venv/
+
+# ==============================
+# Environment Variables
+# ==============================
+.env
+.env.*
+*.env
+!.env.example
+
+# ==============================
+# Python Cache
+# ==============================
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ==============================
+# IDE / Editor
+# ==============================
+.vscode/
+**/.vscode/
+.idea/
+**/.idea/
+*.swp
+*.swo
+*~
+
+# ==============================
+# Temporary / Test Files
+# ==============================
+*.tmp
+*.temp
+*.bak
+*.backup
+tempCodeRunnerFile.py
+
+# ==============================
+# OS Generated
+# ==============================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==============================
+# Logs
+# ==============================
+*.log
+logs/
