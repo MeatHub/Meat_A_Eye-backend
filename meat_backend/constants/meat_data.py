@@ -40,6 +40,24 @@ MEAT_NUTRITION_FALLBACK: Dict[str, Dict[str, Any]] = {
         "fat": 9.0,
         "carbohydrate": 0.0,
     },
+    "Beef_Rib": {
+        "calories": 240,
+        "protein": 19.0,
+        "fat": 17.0,
+        "carbohydrate": 0.0,
+    },
+    "Beef_Round": {
+        "calories": 195,
+        "protein": 21.0,
+        "fat": 10.0,
+        "carbohydrate": 0.0,
+    },
+    "Beef_Shoulder": {
+        "calories": 235,
+        "protein": 18.5,
+        "fat": 17.0,
+        "carbohydrate": 0.0,
+    },
     "Beef_BottomRound": {
         "calories": 190,
         "protein": 21.0,
@@ -118,6 +136,9 @@ MEAT_PRICE_FALLBACK: Dict[str, int] = {
     "Beef_Chuck": 8000,
     "Beef_Brisket": 7000,
     "Beef_Shank": 6000,
+    "Beef_Rib": 9000,
+    "Beef_Round": 5800,
+    "Beef_Shoulder": 7500,
     "Beef_BottomRound": 5500,
     "Beef_TopRound": 5000,
     "Pork_Belly": 5000,
@@ -158,6 +179,58 @@ def get_nutrition_fallback(part_name: str) -> Dict[str, Any]:
         "protein": 20.0,
         "fat": 14.0,
         "carbohydrate": 0.0,
+    }
+
+
+# AI 서버 Fallback용 Mock 부위 목록 (vision 모드)
+MOCK_PART_OPTIONS = [
+    "Beef_Tenderloin",
+    "Beef_Ribeye",
+    "Beef_Sirloin",
+    "Beef_Chuck",
+    "Beef_Brisket",
+    "Beef_Rib",
+    "Beef_Round",
+    "Beef_Shank",
+    "Beef_Shoulder",
+    "Beef_BottomRound",
+]
+
+
+def get_mock_analyze_response(part_name: str | None = None) -> dict:
+    """
+    AI 서버 장애 시 Fallback용 Mock 응답.
+    part_name이 없으면 랜덤 선택.
+    """
+    import random
+    part = part_name or random.choice(MOCK_PART_OPTIONS)
+    return {
+        "partName": part,
+        "confidence": 0.95,
+        "historyNo": None,
+        "heatmap_image": None,  # Mock에는 히트맵 없음
+        "raw": {
+            "status": "success",
+            "data": {
+                "category": part,
+                "probability": 95.0,
+                "is_valid": True,
+            },
+        },
+    }
+
+
+def get_traceability_fallback(trace_no: str | None = None) -> dict:
+    """이력제 API 실패 시 Fallback (도축일자, 등급 등 기본값)."""
+    return {
+        "birth_date": None,
+        "slaughterDate": None,
+        "grade": "1++",
+        "origin": "국내산",
+        "partName": None,
+        "companyName": None,
+        "historyNo": trace_no or "",
+        "source": "fallback",
     }
 
 

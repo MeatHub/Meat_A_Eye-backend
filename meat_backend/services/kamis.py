@@ -1,77 +1,128 @@
-"""KAMIS 시세 API — services 폴더 분리, 재사용."""
+"""KAMIS 시세 API — Dynamic URL/params, data_mapper 연동."""
 import logging
 from datetime import date
 from typing import Any
+from urllib.parse import urlparse, parse_qs, urlunparse
 
 import httpx
+import xmltodict
 
 from ..config.settings import settings
+from .data_mapper import map_ai_class_to_api_codes
 
 logger = logging.getLogger(__name__)
 
-# KAMIS 공공 API (실제 엔드포인트는 KAMIS 문서 기준)
-KAMIS_BASE = "https://www.kamis.or.kr/service/price/xml.do"
+
+def _get_base_url_and_action() -> tuple[str, str]:
+    """KAMIS_API_URL에서 base URL과 action 추출 (action= 포함 시)."""
+    url = (settings.kamis_api_url or "").strip()
+    action = (settings.kamis_action or "periodProductList").strip()
+    if "?" in url:
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query)
+        if "action" in qs:
+            action = qs["action"][0]
+        base = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
+        return base, action
+    if not url:
+        url = "https://www.kamis.or.kr/service/price/xml.do"
+    return url.rstrip("/").rstrip("?"), action
 
 
 class KamisService:
-    """KAMIS 시세 조회 및 market_price_history 적재용."""
+    """KAMIS 시세 조회 — action 동적 변경, part_name 기반 파라미터 주입."""
 
     def __init__(self) -> None:
-        self.api_key = settings.kamis_api_key
+        self.api_key = (settings.kamis_api_key or "").strip()
 
-    async def fetch_current_price(
+    def _build_params(
         self,
         part_name: str,
         region: str = "seoul",
-    ) -> dict[str, Any]:
-        """실시간 시세 조회. 없으면 trend=flat, 가격 0 등 기본값."""
-        if not self.api_key:
-            logger.warning("KAMIS API key not set")
-            return {
-                "currentPrice": 0,
-                "unit": "100g",
-                "trend": "flat",
-                "price_date": str(date.today()),
-            }
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # KAMIS 실제 API 스펙에 맞게 수정 필요
-                r = await client.get(
-                    KAMIS_BASE,
-                    params={
-                        "action": "dailySalesList",
-                        "p_cert_key": self.api_key,
-                        "p_cert_id": "meat-a-eye",
-                        "p_returntype": "json",
-                        "p_product_cls_code": "02",  # 축산물
-                        "p_item_category_code": "500",
-                        "p_region_name": region,
-                    },
-                )
-                r.raise_for_status()
-                data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-        except httpx.TimeoutException:
-            logger.warning("KAMIS request timeout")
-            return {"currentPrice": 0, "unit": "100g", "trend": "flat"}
-        except Exception as e:
-            logger.exception("KAMIS fetch error: %s", e)
-            return {"currentPrice": 0, "unit": "100g", "trend": "flat"}
+        product_cls_code: str = "01",
+    ) -> dict[str, str]:
+        """part_name에 따라 data_mapper에서 변환한 파라미터 주입."""
+        codes = map_ai_class_to_api_codes(part_name)
+        return {
+            "action": _get_base_url_and_action()[1],
+            "p_cert_key": self.api_key,
+            "p_cert_id": "meat-a-eye",
+            "p_returntype": "json",
+            "p_product_cls_code": product_cls_code,
+            "p_item_category_code": codes.get("category_code", "500"),
+            "p_item_code": codes.get("kamis_code", "500"),
+            "p_region_name": region,
+        }
 
-        # 응답 구조에 맞게 파싱 (실제 KAMIS 스펙으로 조정)
-        items = data.get("data", []) if isinstance(data, dict) else []
-        for it in items if isinstance(items, list) else []:
-            name = (it.get("item_name") or it.get("name") or "").strip()
-            if part_name in name or name in part_name:
-                price = int(it.get("price", it.get("dpr1", 0)) or 0)
+    def _parse_response(self, data: dict | str) -> dict[str, Any]:
+        """XML/JSON 응답에서 가격 등 핵심 데이터 추출."""
+        if isinstance(data, str):
+            try:
+                data = xmltodict.parse(data)
+            except Exception as e:
+                logger.warning("KAMIS XML parse error: %s", e)
+                return {}
+
+        items = []
+        if isinstance(data, dict):
+            body = data.get("response", data.get("data", data))
+            if isinstance(body, dict):
+                items = body.get("data", body.get("item", body.get("items", [])))
+            if isinstance(items, dict):
+                items = [items]
+            if not isinstance(items, list):
+                items = []
+
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            price_val = it.get("price") or it.get("dpr1") or it.get("price") or 0
+            try:
+                price = int(float(price_val))
+            except (ValueError, TypeError):
+                price = 0
+            if price > 0:
                 return {
                     "currentPrice": price,
                     "unit": "100g",
                     "trend": (it.get("trend") or "flat").lower(),
                     "price_date": it.get("date") or str(date.today()),
                 }
-        return {
-            "currentPrice": 0,
-            "unit": "100g",
-            "trend": "flat",
-            "price_date": str(date.today()),
-        }
+        return {}
+
+    async def fetch_current_price(
+        self,
+        part_name: str,
+        region: str = "seoul",
+    ) -> dict[str, Any]:
+        """실시간 시세 조회. action은 .env KAMIS_ACTION으로 동적 변경 가능."""
+        if not self.api_key:
+            logger.warning("KAMIS API key not set")
+            return {"currentPrice": 0, "unit": "100g", "trend": "flat", "price_date": str(date.today())}
+
+        base_url, _ = _get_base_url_and_action()
+        if not base_url:
+            return {"currentPrice": 0, "unit": "100g", "trend": "flat", "price_date": str(date.today())}
+
+        params = self._build_params(part_name, region)
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                r = await client.get(base_url, params=params)
+                r.raise_for_status()
+                ct = (r.headers.get("content-type") or "").lower()
+                if "json" in ct:
+                    raw = r.json()
+                else:
+                    raw = r.text
+        except httpx.TimeoutException:
+            logger.warning("KAMIS request timeout")
+            return {"currentPrice": 0, "unit": "100g", "trend": "flat", "price_date": str(date.today())}
+        except Exception as e:
+            logger.exception("KAMIS fetch error: %s", e)
+            return {"currentPrice": 0, "unit": "100g", "trend": "flat", "price_date": str(date.today())}
+
+        result = self._parse_response(raw)
+        if not result:
+            return {"currentPrice": 0, "unit": "100g", "trend": "flat", "price_date": str(date.today())}
+        return result

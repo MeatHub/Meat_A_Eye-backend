@@ -10,6 +10,7 @@ from .config.cors import setup_cors
 from .middleware.errors import register_exception_handlers
 from .routes.v1 import router as v1_router
 from .routes import api as api_router
+from .routes import dashboard as dashboard_router
 
 # SQLAlchemy 모델 등록 (init_db 시 create_all용)
 from . import models  # noqa: F401
@@ -52,6 +53,7 @@ setup_cors(app)
 register_exception_handlers(app)
 app.include_router(v1_router)
 app.include_router(api_router.router, prefix="/api", tags=["api"])
+app.include_router(dashboard_router.router, prefix="/api/dashboard", tags=["dashboard"])
 app.openapi = lambda: custom_openapi(app)
 
 

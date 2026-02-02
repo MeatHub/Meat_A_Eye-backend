@@ -24,10 +24,23 @@ class PriceInfo(BaseModel):
     priceSource: str = "fallback"
 
 
+class TraceabilityInfo(BaseModel):
+    birth_date: str | None = None
+    slaughterDate: str | None = None
+    grade: str | None = None
+    origin: str | None = None
+    partName: str | None = None
+    companyName: str | None = None
+    historyNo: str | None = None
+    source: str = "fallback"
+
+
 class AIAnalyzeResponse(BaseModel):
     partName: str | None = None
     confidence: float | None = None
     historyNo: str | None = None
+    heatmap_image: str | None = None  # Grad-CAM base64 (data:image/jpeg;base64,...)
     raw: dict | None = None
-    nutrition: NutritionInfo | None = None  # 영양정보
-    price: PriceInfo | None = None  # 가격정보
+    nutrition: NutritionInfo | None = None
+    price: PriceInfo | None = None
+    traceability: TraceabilityInfo | None = None

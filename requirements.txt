@@ -14,6 +14,7 @@ passlib[bcrypt]>=1.7.4
 
 # HTTP & External API
 httpx>=0.26.0
+xmltodict>=0.13.0
 
 # Env & validation
 pydantic-settings>=2.1.0

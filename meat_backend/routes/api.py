@@ -1,4 +1,5 @@
 """프론트엔드 호환을 위한 /api 엔드포인트 (Next.js)."""
+import asyncio
 import logging
 from typing import Annotated
 from datetime import datetime, timedelta, date
@@ -14,15 +15,17 @@ from ..models.recognition_log import RecognitionLog
 from ..models.fridge_item import FridgeItem
 from ..models.meat_info import MeatInfo
 from ..models.web_notification import WebNotification
-from ..schemas.ai import AIAnalyzeResponse, NutritionInfo, PriceInfo
+from ..schemas.ai import AIAnalyzeResponse, NutritionInfo, PriceInfo, TraceabilityInfo
+from ..constants.meat_data import get_mock_analyze_response
 from ..services.ai_proxy import AIProxyService
-from ..services.traceability import fetch_traceability
+from ..services.traceability_service import TraceabilityService
 from ..services.nutrition_service import NutritionService
 from ..services.price_service import PriceService
-from ..middleware.jwt import get_current_user, get_current_user_optional
+from ..middleware.jwt import get_current_user, get_current_user_optional, hash_password
 
 nutrition_service = NutritionService()
 price_service = PriceService()
+traceability_service = TraceabilityService()
 
 router = APIRouter()
 ai_proxy = AIProxyService()
@@ -32,42 +35,8 @@ ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 logger = logging.getLogger(__name__)
 
-# Mock 응답 모드 (AI 서버가 없을 때 항상 사용)
-USE_MOCK_RESPONSE = True  # AI 서버 오프라인 상태이므로 항상 Mock 사용
-
-
-def get_mock_response() -> dict:
-    """Mock API 응답 (AI 서버가 없을 때 사용)."""
-    import random
-    
-    # 다양한 Mock 데이터 중 랜덤 선택
-    mock_parts = [
-        {"part": "Beef_Tenderloin", "name": "한우 안심", "confidence": 0.98},
-        {"part": "Beef_Ribeye", "name": "한우 등심", "confidence": 0.95},
-        {"part": "Beef_Sirloin", "name": "한우 채끝살", "confidence": 0.92},
-        {"part": "Pork_Belly", "name": "삼겹살", "confidence": 0.94},
-        {"part": "Pork_Loin", "name": "목살", "confidence": 0.91},
-    ]
-    
-    selected = random.choice(mock_parts)
-    trace_number = f"002{random.randint(100000000, 999999999)}"
-    
-    return {
-        "partName": selected["part"],
-        "confidence": selected["confidence"],
-        "historyNo": trace_number,
-        "raw": {
-            "status": "success",
-            "data": {
-                "category": selected["part"],
-                "category_kr": selected["name"],
-                "probability": selected["confidence"] * 100,
-                "is_valid": True,
-                "part": selected["part"],  # Phase 5 요구사항
-                "trace_number": trace_number,
-            }
-        }
-    }
+# Mock 응답 모드: True면 항상 Mock, False면 AI 서버 호출 후 실패 시 Fallback
+USE_MOCK_RESPONSE = False  # AI 서버 사용 시 False
 
 
 @router.post(
@@ -84,6 +53,7 @@ async def api_analyze(
     image: UploadFile = File(..., alias="image"),
     mode: str = Form("vision", description="vision 또는 ocr"),
     auto_add_fridge: bool = Form(True, description="인식 후 자동으로 냉장고에 추가"),
+    guest_id: str | None = Form(None, description="게스트 세션 ID (게스트 모드용)"),
     db: Annotated[AsyncSession, Depends(get_db)] = ...,
     member: Annotated[Member | None, Depends(get_current_user_optional)] = None,
 ):
@@ -95,9 +65,9 @@ async def api_analyze(
     """
     # Mock 응답 모드 (AI 서버가 없을 때)
     # AI 서버 URL이 없거나 Mock 모드가 활성화된 경우
-    if not settings.ai_server_url or USE_MOCK_RESPONSE:
-        logger.info("Mock 응답 모드 사용 (AI 서버 오프라인)")
-        mock_data = get_mock_response()
+    if USE_MOCK_RESPONSE or not settings.ai_server_url:
+        logger.info("Mock 응답 모드 사용 (AI 서버 오프라인 또는 강제 Mock)")
+        mock_data = get_mock_analyze_response()
         
         # 영양정보 및 가격정보 조회
         nutrition_info = None
@@ -133,10 +103,12 @@ async def api_analyze(
         return AIAnalyzeResponse(
             partName=mock_data["partName"],
             confidence=mock_data["confidence"],
-            historyNo=mock_data["historyNo"],
+            historyNo=mock_data.get("historyNo"),
+            heatmap_image=mock_data.get("heatmap_image"),
             raw=mock_data["raw"],
             nutrition=nutrition_info,
             price=price_info,
+            traceability=None,
         )
     
     # 이미지 검증
@@ -175,11 +147,12 @@ async def api_analyze(
         # Mock 응답으로 폴백 (개발 환경)
         if USE_MOCK_RESPONSE:
             logger.warning(f"AI 서버 오류, Mock 응답 사용: {out.get('error')}")
-            mock_data = get_mock_response()
+            mock_data = get_mock_analyze_response()
             out = {
                 "partName": mock_data["partName"],
                 "confidence": mock_data["confidence"],
-                "historyNo": mock_data["historyNo"],
+                "historyNo": mock_data.get("historyNo"),
+                "heatmap_image": mock_data.get("heatmap_image"),
                 "raw": mock_data["raw"],
             }
         else:
@@ -191,39 +164,93 @@ async def api_analyze(
     part_name = out.get("partName")
     confidence = out.get("confidence", 0.0)
     history_no = out.get("historyNo")
+    heatmap_image = out.get("heatmap_image")
 
-    # 영양정보 및 가격정보 조회 (부위명이 있는 경우)
-    nutrition_info = None
-    price_info = None
-    if part_name:
+    # 4개 공공 API 병렬 호출 (asyncio.gather)
+    async def _fetch_nutrition() -> NutritionInfo | None:
+        if not part_name:
+            return None
         try:
-            nutrition_data = await nutrition_service.fetch_nutrition(part_name)
-            nutrition_info = NutritionInfo(
-                calories=nutrition_data.get("calories"),
-                protein=nutrition_data.get("protein"),
-                fat=nutrition_data.get("fat"),
-                carbohydrate=nutrition_data.get("carbohydrate"),
+            data = await nutrition_service.fetch_nutrition(part_name)
+            return NutritionInfo(
+                calories=data.get("calories"),
+                protein=data.get("protein"),
+                fat=data.get("fat"),
+                carbohydrate=data.get("carbohydrate"),
             )
         except Exception as e:
-            logger.exception(f"영양정보 조회 실패: {e}")
+            logger.exception("영양정보 조회 실패: %s", e)
+            return None
 
+    async def _fetch_price() -> PriceInfo | None:
+        if not part_name:
+            return None
         try:
-            price_data = await price_service.fetch_current_price(
+            data = await price_service.fetch_current_price(
                 part_name=part_name,
                 region="seoul",
                 db=db,
             )
-            price_info = PriceInfo(
-                currentPrice=price_data.get("currentPrice", 0),
-                priceUnit=price_data.get("unit", "100g"),
-                priceTrend=price_data.get("trend", "flat"),
-                priceDate=price_data.get("price_date"),
-                priceSource=price_data.get("source", "fallback"),
+            return PriceInfo(
+                currentPrice=data.get("currentPrice", 0),
+                priceUnit=data.get("unit", "100g"),
+                priceTrend=data.get("trend", "flat"),
+                priceDate=data.get("price_date"),
+                priceSource=data.get("source", "fallback"),
             )
         except Exception as e:
-            logger.exception(f"가격정보 조회 실패: {e}")
+            logger.exception("가격정보 조회 실패: %s", e)
+            return None
 
-    # 로그인한 사용자인 경우에만 로그 및 냉장고 저장
+    async def _fetch_traceability() -> TraceabilityInfo | None:
+        if not history_no:
+            return None
+        try:
+            data = await traceability_service.fetch_traceability(history_no)
+            if data:
+                return TraceabilityInfo(
+                    birth_date=data.get("birth_date"),
+                    slaughterDate=data.get("slaughterDate"),
+                    grade=data.get("grade"),
+                    origin=data.get("origin"),
+                    partName=data.get("partName"),
+                    companyName=data.get("companyName"),
+                    historyNo=data.get("historyNo"),
+                    source=data.get("source", "fallback"),
+                )
+        except Exception as e:
+            logger.exception("이력제 조회 실패: %s", e)
+        return None
+
+    nutrition_info, price_info, traceability_info = await asyncio.gather(
+        _fetch_nutrition(),
+        _fetch_price(),
+        _fetch_traceability(),
+    )
+
+    # 게스트 모드: guest_id가 있으면 게스트 멤버 찾기 또는 생성
+    if not member and guest_id:
+        result = await db.execute(
+            select(Member).where(Member.guest_id == guest_id).limit(1)
+        )
+        member = result.scalar_one_or_none()
+        if not member:
+            # 게스트 계정 생성
+            import uuid
+            temp_email = f"guest_{uuid.uuid4().hex[:12]}@temp.meathub"
+            temp_password = hash_password(uuid.uuid4().hex)
+            member = Member(
+                email=temp_email,
+                password=temp_password,
+                nickname=f"Guest_{guest_id[:8]}",
+                is_guest=True,
+                guest_id=guest_id,
+            )
+            db.add(member)
+            await db.flush()
+            await db.refresh(member)
+
+    # 로그인한 사용자 또는 게스트인 경우 로그 및 냉장고 저장
     if member:
         # recognition_logs에 저장
         recognition_date = datetime.utcnow()
@@ -237,18 +264,7 @@ async def api_analyze(
         db.add(log)
         await db.flush()
 
-        # 축산물 이력제 API 호출 (historyNo가 있는 경우)
-        traceability_data = None
-        if history_no:
-            try:
-                traceability_list = await fetch_traceability(history_no)
-                if traceability_list and len(traceability_list) > 0:
-                    traceability_data = traceability_list[0]
-                    logger.info(f"이력제 정보 조회 성공: {traceability_data}")
-            except Exception as e:
-                logger.exception(f"이력제 API 호출 실패: {e}")
-
-        # 냉장고에 자동 추가
+        # 냉장고에 자동 추가 (이력제는 이미 병렬로 조회됨)
         fridge_item_id = None
         if part_name and auto_add_fridge:
             meat_result = await db.execute(
@@ -259,26 +275,23 @@ async def api_analyze(
                 recognition_date_only = recognition_date.date()
                 expiry_date = recognition_date_only + timedelta(days=3)
 
-                # 이력제 정보에서 도축일자, 등급 추출
                 slaughter_date = None
                 grade = None
                 origin = None
                 company_name = None
-
-                if traceability_data:
-                    slaughter_date_str = traceability_data.get("slaughterDate")
+                if traceability_info:
+                    slaughter_date_str = traceability_info.slaughterDate
                     if slaughter_date_str:
                         try:
                             slaughter_date = datetime.strptime(slaughter_date_str, "%Y-%m-%d").date()
                         except (ValueError, TypeError):
                             try:
-                                slaughter_date = datetime.strptime(slaughter_date_str[:10], "%Y-%m-%d").date()
+                                slaughter_date = datetime.strptime(str(slaughter_date_str)[:10], "%Y-%m-%d").date()
                             except (ValueError, TypeError):
-                                logger.warning(f"도축일자 파싱 실패: {slaughter_date_str}")
-
-                    grade = traceability_data.get("grade")
-                    origin = traceability_data.get("origin")
-                    company_name = traceability_data.get("companyName")
+                                logger.warning("도축일자 파싱 실패: %s", slaughter_date_str)
+                    grade = traceability_info.grade
+                    origin = traceability_info.origin
+                    company_name = traceability_info.companyName
 
                 fridge_item = FridgeItem(
                     member_id=member.id,
@@ -315,8 +328,10 @@ async def api_analyze(
         partName=part_name,
         confidence=confidence,
         historyNo=history_no,
+        heatmap_image=heatmap_image,
         raw=out.get("raw"),
         nutrition=nutrition_info,
         price=price_info,
+        traceability=traceability_info,
     )
 

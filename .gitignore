@@ -7,12 +7,31 @@ venv/
 **/.venv/
 
 # ==============================
-# Environment Variables
+# 🔐 Environment Variables & Secrets
 # ==============================
 .env
 .env.*
 *.env
 !.env.example
+
+# API Keys & Credentials
+secrets.json
+credentials.json
+config/secrets.*
+
+# ==============================
+# 🗄️ Database (임시 스크립트)
+# ==============================
+# 마이그레이션 임시 스크립트 (Python)
+migrate_*.py
+check_db*.py
+test_db*.py
+
+# 데이터베이스 백업
+*.sql.backup
+*.sql.bak
+database_backup/
+db_dump/
 
 # ==============================
 # Python Cache

@@ -30,10 +30,16 @@ class Settings(BaseSettings):
     # AI 서버 (중계용)
     ai_server_url: str = "http://localhost:8001"
 
-    # KAMIS / 식품안전나라 / 축산물이력제 (공공 API)
+    # KAMIS / 식품영양정보 / 축산물이력제 (공공 API)
     kamis_api_key: str = ""
+    kamis_api_url: str = ""
+    kamis_action: str = "periodProductList"
     safe_food_api_key: str = ""
+    safe_food_api_url: str = ""
     traceability_api_key: str = ""
+    traceability_api_url: str = ""
+    import_meat_api_key: str = ""
+    import_meat_api_url: str = ""
 
     # Web Push (VAPID)
     vapid_public_key: str = ""
