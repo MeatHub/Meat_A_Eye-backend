@@ -1,5 +1,5 @@
 """육류 시세/정보 API 스키마."""
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class MeatPriceResponse(BaseModel):
@@ -17,6 +17,14 @@ class MeatInfoResponse(BaseModel):
     storageGuide: str | None = None
 
 
+class GradePrice(BaseModel):
+    grade: str
+    price: int
+    unit: str = "100g"
+    priceDate: str | None = None
+    trend: str = "flat"
+
+
 class MeatInfoByPartNameResponse(BaseModel):
     """부위명으로 조회한 통합 정보."""
     partName: str
@@ -29,4 +37,5 @@ class MeatInfoByPartNameResponse(BaseModel):
     priceTrend: str  # "up" | "down" | "flat"
     priceDate: str | None
     priceSource: str  # "api" | "cache" | "fallback"
+    gradePrices: list[GradePrice] = Field(default_factory=list)
     storageGuide: str | None = None

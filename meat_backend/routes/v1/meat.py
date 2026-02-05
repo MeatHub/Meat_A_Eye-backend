@@ -1,7 +1,7 @@
-"""MEAT-01~03: 실시간 시세, 부위 상세 정보, 부위명으로 통합 정보 조회."""
+"""MEAT-01~03: 실시간 시세, 부위 상세 정보, 부위명으로 통합 정보 조회. MEAT-04: 이력/묶음번호 조회."""
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,16 +9,18 @@ from ...config.database import get_db
 from ...models.meat_info import MeatInfo
 from ...models.market_price import MarketPrice
 from ...schemas.meat import MeatPriceResponse, MeatInfoResponse, MeatInfoByPartNameResponse
-from ...services.kamis import KamisService
-from ...services.safe_food import SafeFoodService
+from ...schemas.ai import TraceabilityInfo
+from ... import apis
+from ...apis import KamisService
 from ...services.nutrition_service import NutritionService
 from ...services.price_service import PriceService
+from ...services.traceability_service import TraceabilityService
 
 router = APIRouter()
 kamis = KamisService()
-safe_food = SafeFoodService()
 nutrition_service = NutritionService()
 price_service = PriceService()
+traceability_service = TraceabilityService()
 
 
 @router.get(
@@ -57,12 +59,12 @@ async def meat_info(
     row = await db.get(MeatInfo, meat_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="육류 ID 오류")
-    # 식품안전나라 영양정보 보강 (선택)
-    extra = await safe_food.fetch_nutrition(row.part_name)
-    recipes = extra.get("recipes") or ["스테이크", "장조림"]
-    cal = row.calories if row.calories is not None else extra.get("calories")
-    prot = float(row.protein) if row.protein is not None else extra.get("protein")
-    fat_val = float(row.fat) if row.fat is not None else extra.get("fat")
+    extra = await nutrition_service.fetch_nutrition(row.part_name, db=db)
+    default_nutrition = extra.get("default") or {}
+    recipes = extra.get("recipes") or []
+    cal = row.calories if row.calories is not None else default_nutrition.get("calories")
+    prot = float(row.protein) if row.protein is not None else default_nutrition.get("protein")
+    fat_val = float(row.fat) if row.fat is not None else default_nutrition.get("fat")
     return MeatInfoResponse(
         name=row.part_name,
         calories=cal,
@@ -91,7 +93,7 @@ async def meat_info_by_part_name(
     - 가격정보: KAMIS API (캐시 지원)
     """
     # 1. 영양정보 조회
-    nutrition_data = await nutrition_service.fetch_nutrition(part_name)
+    nutrition_data = await nutrition_service.fetch_nutrition(part_name, db=db)
     
     # 2. 가격정보 조회 (DB 캐시 포함)
     price_data = await price_service.fetch_current_price(
@@ -108,21 +110,22 @@ async def meat_info_by_part_name(
         )
         meat_info_record = result.scalar_one_or_none()
     
-    # 4. 응답 구성 (DB 데이터 우선, 없으면 API 데이터)
+    # 4. 응답 구성 (DB 데이터 우선, 없으면 영양 DB 데이터)
+    default_nutrition = nutrition_data.get("default") or {}
     calories = (
         meat_info_record.calories
         if meat_info_record and meat_info_record.calories
-        else nutrition_data.get("calories")
+        else default_nutrition.get("calories")
     )
     protein = (
         float(meat_info_record.protein)
         if meat_info_record and meat_info_record.protein
-        else nutrition_data.get("protein")
+        else default_nutrition.get("protein")
     )
     fat = (
         float(meat_info_record.fat)
         if meat_info_record and meat_info_record.fat
-        else nutrition_data.get("fat")
+        else default_nutrition.get("fat")
     )
     
     return MeatInfoByPartNameResponse(
@@ -130,11 +133,116 @@ async def meat_info_by_part_name(
         calories=calories,
         protein=protein,
         fat=fat,
-        carbohydrate=nutrition_data.get("carbohydrate"),
+        carbohydrate=default_nutrition.get("carbohydrate"),
         currentPrice=price_data.get("currentPrice", 0),
         priceUnit=price_data.get("unit", "100g"),
         priceTrend=price_data.get("trend", "flat"),
         priceDate=price_data.get("price_date"),
-        priceSource=price_data.get("source", "fallback"),
+        priceSource=price_data.get("source", "api"),
+        gradePrices=price_data.get("gradePrices", []),
         storageGuide=meat_info_record.storage_guide if meat_info_record else None,
     )
+
+
+@router.get(
+    "/traceability",
+    response_model=TraceabilityInfo,
+    summary="MEAT-04 이력번호/묶음번호로 이력제 조회 (국내/수입 자동 분기)",
+    responses={
+        400: {"description": "번호 없음"},
+        502: {"description": "이력제에서 조회 실패"},
+        503: {"description": "이력제 API 연결 실패"},
+    },
+)
+async def meat_traceability_by_number(
+    number: Annotated[str, Query(description="이력번호(12자리) 또는 수입 묶음번호(A+숫자)")],
+):
+    """
+    이력번호 또는 수입육 묶음번호를 입력하면 이력제 정보를 반환합니다.
+    - 국내: 12자리 숫자 → MTRACE
+    - 수입 이력번호: 그 외 → meatwatch 이력정보(Detail)
+    - 수입 묶음번호: A + 19~29자리 → meatwatch 묶음정보(List) 첫 건
+    """
+    if not number or not str(number).strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이력번호 또는 묶음번호가 필요합니다.")
+    data = await traceability_service.fetch_traceability(str(number).strip(), part_name=None)
+    return TraceabilityInfo(
+        historyNo=data.get("historyNo"),
+        blNo=data.get("blNo"),
+        partName=data.get("partName"),
+        origin=data.get("origin"),
+        slaughterDate=data.get("slaughterDate"),
+        slaughterDateFrom=data.get("slaughterDateFrom"),
+        slaughterDateTo=data.get("slaughterDateTo"),
+        processingDateFrom=data.get("processingDateFrom"),
+        processingDateTo=data.get("processingDateTo"),
+        exporter=data.get("exporter"),
+        importer=data.get("importer"),
+        importDate=data.get("importDate"),
+        partCode=data.get("partCode"),
+        companyName=data.get("companyName"),
+        recommendedExpiry=data.get("recommendedExpiry"),
+        limitFromDt=data.get("limitFromDt"),
+        limitToDt=data.get("limitToDt"),
+        refrigCnvrsAt=data.get("refrigCnvrsAt"),
+        refrigDistbPdBeginDe=data.get("refrigDistbPdBeginDe"),
+        refrigDistbPdEndDe=data.get("refrigDistbPdEndDe"),
+        birth_date=data.get("birth_date"),
+        grade=data.get("grade"),
+        source=data.get("source", "api"),
+        server_maintenance=data.get("server_maintenance", False),
+    )
+
+
+@router.get(
+    "/traceability/bundle",
+    response_model=list[TraceabilityInfo],
+    summary="MEAT-05 수입육 묶음번호로 이력 목록 조회 (클릭 시 상세는 /traceability?number=이력번호)",
+    responses={
+        400: {"description": "묶음번호 아님"},
+        502: {"description": "묶음 조회 실패"},
+        503: {"description": "API 연결 실패"},
+    },
+)
+async def meat_traceability_bundle_list(
+    number: Annotated[str, Query(description="수입 묶음번호 (A+숫자)")],
+):
+    """묶음번호 입력 시 해당 묶음에 속한 이력 목록을 반환. 각 이력번호로 GET /traceability?number= 이력번호 호출 시 상세 조회."""
+    if not number or not str(number).strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="묶음번호가 필요합니다.")
+    num = str(number).strip()
+    if not apis._is_bundle_no(num):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="묶음번호 형식이 아닙니다. (A로 시작하는 20자리 이상)",
+        )
+    items = await apis.fetch_import_bundle_list(num)
+    return [
+        TraceabilityInfo(
+            historyNo=d.get("historyNo"),
+            blNo=d.get("blNo"),
+            partName=d.get("partName"),
+            origin=d.get("origin"),
+            slaughterDate=d.get("slaughterDate"),
+            slaughterDateFrom=d.get("slaughterDateFrom"),
+            slaughterDateTo=d.get("slaughterDateTo"),
+            processingDateFrom=d.get("processingDateFrom"),
+            processingDateTo=d.get("processingDateTo"),
+            exporter=d.get("exporter"),
+            importer=d.get("importer"),
+            importDate=d.get("importDate"),
+            partCode=d.get("partCode"),
+            companyName=d.get("companyName"),
+            recommendedExpiry=d.get("recommendedExpiry"),
+            limitFromDt=d.get("limitFromDt"),
+            limitToDt=d.get("limitToDt"),
+            refrigCnvrsAt=d.get("refrigCnvrsAt"),
+            refrigDistbPdBeginDe=d.get("refrigDistbPdBeginDe"),
+            refrigDistbPdEndDe=d.get("refrigDistbPdEndDe"),
+            birth_date=d.get("birth_date"),
+            grade=d.get("grade"),
+            source=d.get("source", "api"),
+            server_maintenance=d.get("server_maintenance", False),
+        )
+        for d in items
+    ]

@@ -1,2 +1,2 @@
-"""Constants package for fallback data."""
+"""Constants package."""
 

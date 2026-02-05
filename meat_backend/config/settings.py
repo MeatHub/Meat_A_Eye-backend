@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     # KAMIS / 식품영양정보 / 축산물이력제 (공공 API)
     kamis_api_key: str = ""
+    kamis_cert_id: str = "meat-a-eye"
     kamis_api_url: str = ""
     kamis_action: str = "periodProductList"
     safe_food_api_key: str = ""
@@ -40,6 +41,15 @@ class Settings(BaseSettings):
     traceability_api_url: str = ""
     import_meat_api_key: str = ""
     import_meat_api_url: str = ""
+    # 국내육 이력제 (MTRACE REST - api.mtrace.go.kr)
+    mtrace_base_url: str = "http://api.mtrace.go.kr/rest"
+    mtrace_user_id: str = ""
+    mtrace_api_key: str = ""
+    mtrace_call_type: str = "1"
+    mtrace_proc_type: str = "1"
+    # 수입육 이력제 (meatwatch REST) — SYS_ID에 API키 사용
+    meatwatch_base_url: str = "http://www.meatwatch.go.kr/rest"
+    meatwatch_sys_id: str = "test2000"  # IMPORT_MEAT_API_KEY 또는 SYS_ID
 
     # Web Push (VAPID)
     vapid_public_key: str = ""

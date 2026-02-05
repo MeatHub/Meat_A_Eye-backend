@@ -100,20 +100,40 @@ CREATE TABLE fridge_items (
 ) ENGINE=InnoDB COMMENT='냉장고 보관 목록';
 
 -- ============================================================
--- 5. market_prices (시세 정보)
--- 설명: 고기 부위별 시장 가격 (KAMIS API 연동)
+-- 5. meat_nutrition (영양정보 - 전국통합식품영양성분정보 육류)
+-- 설명: 원재료성식품 JSON에서 소/돼지 등 육류만 추출하여 저장 (LIKE 검색용)
+-- 팀원: MySQL 워크벤치/터미널에서 이 블록 실행 후, scripts/migrate_nutrition.py 실행
+-- ============================================================
+-- 1) 기존에 혹시 잘못 생성된 테이블이 있다면 삭제
+DROP TABLE IF EXISTS meat_nutrition;
+
+-- 2) 영양 정보 전용 테이블 생성
+CREATE TABLE meat_nutrition (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    food_nm VARCHAR(255) NOT NULL COMMENT '식품명',
+    calories FLOAT NULL COMMENT '에너지(kcal/100g)',
+    protein FLOAT NULL COMMENT '단백질(g/100g)',
+    fat FLOAT NULL COMMENT '지방(g/100g)',
+    carbs FLOAT NULL COMMENT '탄수화물(g/100g)',
+    INDEX idx_food_nm (food_nm)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='전국통합식품영양성분정보 육류 (원재료성식품)';
+
+-- ============================================================
+-- 6. market_prices (시세 정보)
+-- 설명: 고기 부위별 시장 가격 (KAMIS API 연동) — 100g당 가격 저장
 -- ============================================================
 CREATE TABLE market_prices (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   part_name VARCHAR(100) NOT NULL COMMENT '부위명',
-  current_price INT NOT NULL COMMENT '현재 가격 (원)',
+  current_price INT NOT NULL COMMENT '100g당 가격 (원)',
   price_date DATE NOT NULL COMMENT '가격 기준일',
   region VARCHAR(50) NOT NULL COMMENT '지역 (서울, 부산 등)',
+  UNIQUE KEY uq_market_price (part_name, region, price_date),
   INDEX idx_price_part_region_date (part_name, region, price_date)
-) ENGINE=InnoDB COMMENT='시세 정보 (현재가)';
+) ENGINE=InnoDB COMMENT='시세 정보 (100g당 가격)';
 
 -- ============================================================
--- 6. market_price_history (시세 이력)
+-- 7. market_price_history (시세 이력)
 -- 설명: 시세 변동 이력 (추세 분석용)
 -- ============================================================
 CREATE TABLE market_price_history (
@@ -128,7 +148,7 @@ CREATE TABLE market_price_history (
 ) ENGINE=InnoDB COMMENT='시세 이력';
 
 -- ============================================================
--- 7. web_push_subscriptions (Web Push 구독 정보)
+-- 8. web_push_subscriptions (Web Push 구독 정보)
 -- 설명: 사용자별 Web Push 구독 정보 (VAPID 키 저장)
 -- ============================================================
 CREATE TABLE web_push_subscriptions (
@@ -146,7 +166,7 @@ CREATE TABLE web_push_subscriptions (
 ) ENGINE=InnoDB COMMENT='Web Push 구독 정보';
 
 -- ============================================================
--- 8. web_notifications (알림 발송 이력)
+-- 9. web_notifications (알림 발송 이력)
 -- 설명: 유통기한 알림 등 발송 이력 및 예약 관리
 -- ============================================================
 CREATE TABLE web_notifications (
@@ -185,20 +205,20 @@ INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guid
 -- ============================================================
 -- 데이터베이스 스키마 정보
 -- ============================================================
--- 총 테이블 수: 8개
+-- 총 테이블 수: 9개
 -- 주요 테이블:
 --   1. members: 회원 정보 (게스트 포함)
 --   2. meat_info: 고기 부위 기본 정보
 --   3. recognition_logs: AI 인식 로그
 --   4. fridge_items: 냉장고 보관 목록 (이력제 정보 포함)
---   5. market_prices: 시세 정보
---   6. market_price_history: 시세 이력
---   7. web_push_subscriptions: Web Push 구독
---   8. web_notifications: 알림 발송 이력
+--   5. meat_nutrition: 영양정보 (전국통합식품영양성분정보 육류, LIKE 검색)
+--   6. market_prices: 시세 정보
+--   7. market_price_history: 시세 이력
+--   8. web_push_subscriptions: Web Push 구독
+--   9. web_notifications: 알림 발송 이력
 --
 -- 외부 API 연동:
---   - KAMIS API: 시세 정보
---   - 식품안전나라 API: 영양정보
---   - 축산물 이력제 API: 도축일자, 등급, 원산지
---   - 수입육 이력제 API: 수입육 이력 정보
+--   - KAMIS API: 시세 정보 (p_itemcategorycode, KAMIS_CERT_ID)
+--   - 국내 이력제(12자리 숫자): api.mtrace.go.kr
+--   - 수입 이력제(그 외): meatwatch.go.kr
 -- ============================================================

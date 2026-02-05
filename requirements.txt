@@ -18,6 +18,7 @@ xmltodict>=0.13.0
 
 # Env & validation
 pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
 email-validator>=2.1.0
 
 # Optional: Web Push (VAPID)

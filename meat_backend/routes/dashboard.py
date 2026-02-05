@@ -28,6 +28,75 @@ class PopularCutsResponse(BaseModel):
     items: List[PopularCutItem]
 
 
+class PriceItem(BaseModel):
+    partName: str
+    category: str  # "beef" | "pork"
+    currentPrice: int
+    unit: str = "100g"
+    priceDate: str | None = None
+
+
+class DashboardPricesResponse(BaseModel):
+    beef: List[PriceItem]
+    pork: List[PriceItem]
+
+
+@router.get(
+    "/prices",
+    response_model=DashboardPricesResponse,
+    summary="실시간 돼지/소 가격 (100g당)",
+)
+async def get_dashboard_prices(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    소(등심, 갈비), 돼지(삼겹, 목살) 대표 부위 100g당 가격 조회.
+    market_prices 캐시 또는 KAMIS API 사용.
+    """
+    beef_parts = [("Beef_Ribeye", "등심"), ("Beef_Rib", "갈비")]
+    pork_parts = [("Pork_Belly", "삼겹살"), ("Pork_Loin", "목살")]
+    beef_items: List[PriceItem] = []
+    pork_items: List[PriceItem] = []
+
+    for code, name in beef_parts:
+        try:
+            data = await price_service.fetch_current_price(
+                part_name=code, region="seoul", db=db
+            )
+            if data.get("currentPrice", 0) > 0:
+                beef_items.append(
+                    PriceItem(
+                        partName=name,
+                        category="beef",
+                        currentPrice=data["currentPrice"],
+                        unit=data.get("unit", "100g"),
+                        priceDate=data.get("price_date"),
+                    )
+                )
+        except Exception as e:
+            logger.warning("소 가격 조회 실패 (%s): %s", name, e)
+
+    for code, name in pork_parts:
+        try:
+            data = await price_service.fetch_current_price(
+                part_name=code, region="seoul", db=db
+            )
+            if data.get("currentPrice", 0) > 0:
+                pork_items.append(
+                    PriceItem(
+                        partName=name,
+                        category="pork",
+                        currentPrice=data["currentPrice"],
+                        unit=data.get("unit", "100g"),
+                        priceDate=data.get("price_date"),
+                    )
+                )
+        except Exception as e:
+            logger.warning("돼지 가격 조회 실패 (%s): %s", name, e)
+
+    return DashboardPricesResponse(beef=beef_items, pork=pork_items)
+
+
 @router.get(
     "/popular-cuts",
     response_model=PopularCutsResponse,
@@ -85,9 +154,9 @@ async def get_popular_cuts(
         current_count = row.count
         prev_count = prev_counts.get(part_name, 0)
         
-        # 트렌드 계산 (전주 대비 증감률)
+        # 트렌드 계산 (전주 대비 증감률, prev=0이면 "신규"로 표시)
         if prev_count == 0:
-            trend = f"+{current_count * 100}%"  # 신규 인기
+            trend = "신규" if current_count > 0 else "0%"
         else:
             change = ((current_count - prev_count) / prev_count) * 100
             trend = f"{'+' if change > 0 else ''}{int(change)}%"
@@ -113,12 +182,12 @@ async def get_popular_cuts(
             )
         )
     
-    # 데이터 없을 시 기본값
+    # 데이터 없을 시 빈 리스트 반환 (더미 데이터 제거)
     if not items:
-        items = [
-            PopularCutItem(name="삼겹살", count=0, trend="+0%", currentPrice=5000),
-            PopularCutItem(name="한우 등심", count=0, trend="+0%", currentPrice=12000),
-            PopularCutItem(name="닭가슴살", count=0, trend="+0%", currentPrice=3000),
-        ]
+        print("=" * 50)
+        print(f"🚨 [API INFO] Endpoint: /api/dashboard/popular-cuts")
+        print(f"🚨 [DETAILS]: 인식 로그 데이터 없음 (최근 7일)")
+        print("=" * 50)
+        logger.warning("인기 부위 데이터 없음 (최근 7일간 인식 로그 없음)")
     
     return PopularCutsResponse(items=items)

@@ -15,9 +15,11 @@ from ...schemas.fridge import (
     FridgeListResponse,
     FridgeItemResponse,
     FridgeItemAdd,
+    FridgeItemFromTraceabilityAdd,
     FridgeAlertUpdate,
     FridgeStatusUpdate,
 )
+from ...models.web_notification import WebNotification
 from ...middleware.jwt import get_current_user, get_current_user_optional
 
 router = APIRouter()
@@ -45,6 +47,10 @@ async def fridge_list(
 ):
     # 게스트 사용자도 접근 가능하지만, 빈 리스트 반환
     if not member:
+        print("=" * 50)
+        print(f"🚨 [API INFO] Endpoint: /api/v1/fridge/list")
+        print(f"🚨 [DETAILS]: 게스트 모드 또는 인증 없음, 빈 리스트 반환")
+        print("=" * 50)
         return FridgeListResponse(items=[])
     
     q = (
@@ -88,11 +94,28 @@ async def fridge_add(
     db: Annotated[AsyncSession, Depends(get_db)],
     member: Annotated[Member, Depends(get_current_user)],
 ):
-    if body.expiry_date < body.storage_date:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="만료일은 보관일 이후여야 합니다")
-    meat = await db.get(MeatInfo, body.meatId)
-    if not meat:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="meat_info 없음")
+    try:
+        if body.expiry_date < body.storage_date:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: /api/v1/fridge/item")
+            print(f"🚨 [DETAILS]: 날짜 검증 실패 - 만료일({body.expiry_date}) < 보관일({body.storage_date})")
+            print("=" * 50)
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="만료일은 보관일 이후여야 합니다")
+        meat = await db.get(MeatInfo, body.meatId)
+        if not meat:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: /api/v1/fridge/item")
+            print(f"🚨 [DETAILS]: meat_info 없음 (meatId: {body.meatId})")
+            print("=" * 50)
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="meat_info 없음")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("=" * 50)
+        print(f"🚨 [REAL ERROR] Endpoint: /api/v1/fridge/item")
+        print(f"🚨 [DETAILS]: 냉장고 추가 실패 - {type(e).__name__}: {str(e)}")
+        print("=" * 50)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"냉장고 추가 실패: {str(e)}")
     item = FridgeItem(
         member_id=member.id,
         meat_info_id=body.meatId,
@@ -103,6 +126,77 @@ async def fridge_add(
     db.add(item)
     await db.flush()
     await db.refresh(item)
+    return {"id": item.id, "status": "stored", "alertScheduled": True}
+
+
+@router.post(
+    "/item-from-traceability",
+    summary="FRIDGE-02b 이력 조회 결과로 냉장고 추가",
+    responses={
+        400: {"description": "날짜/meat_info 오류"},
+        401: {"description": "로그인 필요"},
+    },
+)
+async def fridge_add_from_traceability(
+    body: FridgeItemFromTraceabilityAdd,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    member: Annotated[Member, Depends(get_current_user)],
+):
+    if body.expiryDate < body.storageDate:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="만료일은 보관일 이후여야 합니다",
+        )
+    meat = None
+    if body.meatId:
+        meat = await db.get(MeatInfo, body.meatId)
+    if not meat and body.partName:
+        # 품목명에서 돼지/소 구분 후 해당 category 첫 건 사용
+        p = (body.partName or "").lower()
+        if "돼지" in p or "pork" in p:
+            r = await db.execute(select(MeatInfo).where(MeatInfo.category == "pork").limit(1))
+            meat = r.scalar_one_or_none()
+        if not meat and ("소" in p or "beef" in p or "쇠" in p):
+            r = await db.execute(select(MeatInfo).where(MeatInfo.category == "beef").limit(1))
+            meat = r.scalar_one_or_none()
+        if not meat:
+            r = await db.execute(select(MeatInfo).limit(1))
+            meat = r.scalar_one_or_none()
+    if not meat:
+        r = await db.execute(select(MeatInfo).limit(1))
+        meat = r.scalar_one_or_none()
+    if not meat:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="meat_info가 없습니다. 관리자에게 문의하세요.",
+        )
+    slaughter_date = body.slaughterDate
+    item = FridgeItem(
+        member_id=member.id,
+        meat_info_id=meat.id,
+        storage_date=body.storageDate,
+        expiry_date=body.expiryDate,
+        status="stored",
+        slaughter_date=slaughter_date,
+        trace_number=body.traceNumber,
+        origin=body.origin,
+        company_name=body.companyName,
+    )
+    db.add(item)
+    await db.flush()
+    await db.refresh(item)
+    alert_time = datetime.combine(body.expiryDate, datetime.min.time().replace(hour=9))
+    notif = WebNotification(
+        member_id=member.id,
+        fridge_item_id=item.id,
+        notification_type="expiry_alert",
+        title=f"{meat.part_name} 유통기한 임박",
+        body=f"{meat.part_name}의 유통기한이 {body.expiryDate}입니다.",
+        scheduled_at=alert_time,
+        status="pending",
+    )
+    db.add(notif)
+    await db.flush()
     return {"id": item.id, "status": "stored", "alertScheduled": True}
 
 

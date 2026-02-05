@@ -22,6 +22,18 @@ class FridgeItemAdd(BaseModel):
     expiryDate: date = Field(..., description="YYYY-MM-DD")
 
 
+class FridgeItemFromTraceabilityAdd(BaseModel):
+    """이력 조회 결과로 냉장고 추가 (partName 또는 meatId로 meat_info 결정)."""
+    partName: str | None = Field(None, description="부위명(수입축산물 품목 등). 없으면 수입육 기본값 사용")
+    meatId: int | None = Field(None, description="meat_info ID. partName 없을 때 사용")
+    storageDate: date = Field(..., description="YYYY-MM-DD 보관일")
+    expiryDate: date = Field(..., description="YYYY-MM-DD 유통기한(권장)")
+    traceNumber: str | None = None
+    slaughterDate: date | None = None
+    origin: str | None = None
+    companyName: str | None = None
+
+
 class FridgeAlertUpdate(BaseModel):
     alertBefore: int | None = None
     useWebPush: bool | None = None

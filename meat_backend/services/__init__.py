@@ -1,5 +1,4 @@
-from .kamis import KamisService
-from .safe_food import SafeFoodService
-from .ai_proxy import AIProxyService
+from .nutrition_service import NutritionService
+from ..apis import KamisService, AIProxyService
 
-__all__ = ["KamisService", "SafeFoodService", "AIProxyService"]
+__all__ = ["KamisService", "NutritionService", "AIProxyService"]

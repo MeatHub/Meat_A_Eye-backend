@@ -4,7 +4,8 @@ import logging
 from typing import Annotated
 from datetime import datetime, timedelta, date
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, status, UploadFile
+import httpx
+from fastapi import APIRouter, Depends, File, Form, HTTPException, status, UploadFile, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,9 +16,8 @@ from ..models.recognition_log import RecognitionLog
 from ..models.fridge_item import FridgeItem
 from ..models.meat_info import MeatInfo
 from ..models.web_notification import WebNotification
-from ..schemas.ai import AIAnalyzeResponse, NutritionInfo, PriceInfo, TraceabilityInfo
-from ..constants.meat_data import get_mock_analyze_response
-from ..services.ai_proxy import AIProxyService
+from ..schemas.ai import AIAnalyzeResponse, NutritionInfo, NutritionInfoByGrade, NutritionInfoBySubpart, PriceInfo, TraceabilityInfo
+from ..apis import AIProxyService
 from ..services.traceability_service import TraceabilityService
 from ..services.nutrition_service import NutritionService
 from ..services.price_service import PriceService
@@ -35,9 +35,6 @@ ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 logger = logging.getLogger(__name__)
 
-# Mock 응답 모드: True면 항상 Mock, False면 AI 서버 호출 후 실패 시 Fallback
-USE_MOCK_RESPONSE = False  # AI 서버 사용 시 False
-
 
 @router.post(
     "/analyze",
@@ -50,6 +47,7 @@ USE_MOCK_RESPONSE = False  # AI 서버 사용 시 False
     },
 )
 async def api_analyze(
+    request: Request,
     image: UploadFile = File(..., alias="image"),
     mode: str = Form("vision", description="vision 또는 ocr"),
     auto_add_fridge: bool = Form(True, description="인식 후 자동으로 냉장고에 추가"),
@@ -61,59 +59,27 @@ async def api_analyze(
     AI 이미지 분석 엔드포인트 (프론트엔드 호환).
     
     - 인증이 없어도 사용 가능 (게스트 모드)
-    - Mock 응답 모드 지원 (개발 환경)
+    - 실제 API만 사용 (더미 데이터 제거)
     """
-    # Mock 응답 모드 (AI 서버가 없을 때)
-    # AI 서버 URL이 없거나 Mock 모드가 활성화된 경우
-    if USE_MOCK_RESPONSE or not settings.ai_server_url:
-        logger.info("Mock 응답 모드 사용 (AI 서버 오프라인 또는 강제 Mock)")
-        mock_data = get_mock_analyze_response()
-        
-        # 영양정보 및 가격정보 조회
-        nutrition_info = None
-        price_info = None
-        if mock_data["partName"]:
-            try:
-                nutrition_data = await nutrition_service.fetch_nutrition(mock_data["partName"])
-                nutrition_info = NutritionInfo(
-                    calories=nutrition_data.get("calories"),
-                    protein=nutrition_data.get("protein"),
-                    fat=nutrition_data.get("fat"),
-                    carbohydrate=nutrition_data.get("carbohydrate"),
-                )
-            except Exception as e:
-                logger.exception(f"Mock 모드 영양정보 조회 실패: {e}")
-
-            try:
-                price_data = await price_service.fetch_current_price(
-                    part_name=mock_data["partName"],
-                    region="seoul",
-                    db=db,
-                )
-                price_info = PriceInfo(
-                    currentPrice=price_data.get("currentPrice", 0),
-                    priceUnit=price_data.get("unit", "100g"),
-                    priceTrend=price_data.get("trend", "flat"),
-                    priceDate=price_data.get("price_date"),
-                    priceSource=price_data.get("source", "fallback"),
-                )
-            except Exception as e:
-                logger.exception(f"Mock 모드 가격정보 조회 실패: {e}")
-        
-        return AIAnalyzeResponse(
-            partName=mock_data["partName"],
-            confidence=mock_data["confidence"],
-            historyNo=mock_data.get("historyNo"),
-            heatmap_image=mock_data.get("heatmap_image"),
-            raw=mock_data["raw"],
-            nutrition=nutrition_info,
-            price=price_info,
-            traceability=None,
+    # AI 서버 URL 확인
+    if not settings.ai_server_url:
+        print("=" * 50)
+        print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+        print(f"🚨 [DETAILS]: AI 서버 URL이 설정되지 않음 (AI_SERVER_URL)")
+        print("=" * 50)
+        logger.error("AI 서버 URL이 설정되지 않음 (AI_SERVER_URL)")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI 서버가 설정되지 않았습니다."
         )
     
     # 이미지 검증
     ct = (image.content_type or "").lower()
     if ct and ct not in ALLOWED_CONTENT_TYPES:
+        print("=" * 50)
+        print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+        print(f"🚨 [DETAILS]: 지원하지 않는 이미지 포맷 - {ct}")
+        print("=" * 50)
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="지원하지 않는 이미지 포맷 (jpeg/png/webp)"
@@ -122,6 +88,10 @@ async def api_analyze(
     try:
         raw = await image.read()
     except Exception as e:
+        print("=" * 50)
+        print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+        print(f"🚨 [DETAILS]: {str(e)}")
+        print("=" * 50)
         logger.exception("Image read error: %s", e)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -129,6 +99,10 @@ async def api_analyze(
         )
     
     if len(raw) > MAX_IMAGE_SIZE:
+        print("=" * 50)
+        print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+        print(f"🚨 [DETAILS]: 파일 크기 초과 - {len(raw)} bytes (최대 {MAX_IMAGE_SIZE} bytes)")
+        print("=" * 50)
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="파일 크기 초과 (5MB 제한)"
@@ -141,25 +115,32 @@ async def api_analyze(
     filename = image.filename or "image.jpg"
     
     # AI 서버 호출
-    out = await ai_proxy.analyze(raw, filename=filename, mode=mode)
+    try:
+        out = await ai_proxy.analyze(raw, filename=filename, mode=mode)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("=" * 50)
+        print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+        print(f"🚨 [DETAILS]: AI 서버 호출 실패 - {type(e).__name__}: {str(e)}")
+        print("=" * 50)
+        logger.exception(f"AI 서버 호출 실패: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"AI 서버 연결 실패: {str(e)}"
+        )
     
     if out.get("error"):
-        # Mock 응답으로 폴백 (개발 환경)
-        if USE_MOCK_RESPONSE:
-            logger.warning(f"AI 서버 오류, Mock 응답 사용: {out.get('error')}")
-            mock_data = get_mock_analyze_response()
-            out = {
-                "partName": mock_data["partName"],
-                "confidence": mock_data["confidence"],
-                "historyNo": mock_data.get("historyNo"),
-                "heatmap_image": mock_data.get("heatmap_image"),
-                "raw": mock_data["raw"],
-            }
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"인식 실패: {out.get('error')}"
-            )
+        error_msg = out.get('error', 'Unknown error')
+        print("=" * 50)
+        print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+        print(f"🚨 [DETAILS]: AI 서버 응답 오류 - {error_msg}")
+        print("=" * 50)
+        logger.error(f"AI 서버 응답 오류: {error_msg}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"인식 실패: {error_msg}"
+        )
 
     part_name = out.get("partName")
     confidence = out.get("confidence", 0.0)
@@ -171,14 +152,35 @@ async def api_analyze(
         if not part_name:
             return None
         try:
-            data = await nutrition_service.fetch_nutrition(part_name)
+            data = await nutrition_service.fetch_nutrition(part_name, db=db)
+            # 새로운 구조: by_grade와 default 지원
+            if "by_grade" in data:
+                # 등급별 데이터가 있으면 첫 번째 등급 사용 (또는 가장 높은 등급)
+                default_data = data.get("default", {})
+            else:
+                # 기존 구조 (하위 호환성)
+                default_data = data
+            
             return NutritionInfo(
-                calories=data.get("calories"),
-                protein=data.get("protein"),
-                fat=data.get("fat"),
-                carbohydrate=data.get("carbohydrate"),
+                calories=default_data.get("calories"),
+                protein=default_data.get("protein"),
+                fat=default_data.get("fat"),
+                carbohydrate=default_data.get("carbohydrate"),
+                source=default_data.get("source", "api"),
+                grade=default_data.get("grade"),
             )
+        except HTTPException as e:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+            print(f"🚨 [DETAILS]: 영양정보 {e.status_code} (부위: {part_name}) - {e.detail}")
+            print("=" * 50)
+            logger.exception("영양정보 조회 실패: %s", e.detail)
+            return None
         except Exception as e:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+            print(f"🚨 [DETAILS]: 영양정보 {type(e).__name__} (부위: {part_name}) - {str(e)}")
+            print("=" * 50)
             logger.exception("영양정보 조회 실패: %s", e)
             return None
 
@@ -196,9 +198,28 @@ async def api_analyze(
                 priceUnit=data.get("unit", "100g"),
                 priceTrend=data.get("trend", "flat"),
                 priceDate=data.get("price_date"),
-                priceSource=data.get("source", "fallback"),
+                priceSource=data.get("source", "api"),
+                gradePrices=data.get("gradePrices", []),
             )
+        except httpx.TimeoutException as e:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+            print(f"🚨 [DETAILS]: 가격정보 API Timeout (부위: {part_name}) - {str(e)}")
+            print("=" * 50)
+            logger.exception("가격정보 API Timeout: %s", e)
+            return None
+        except httpx.HTTPStatusError as e:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+            print(f"🚨 [DETAILS]: 가격정보 API HTTP {e.response.status_code} (부위: {part_name}) - {str(e)}")
+            print("=" * 50)
+            logger.exception("가격정보 API HTTP Error: %s", e)
+            return None
         except Exception as e:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+            print(f"🚨 [DETAILS]: 가격정보 API {type(e).__name__} (부위: {part_name}) - {str(e)}")
+            print("=" * 50)
             logger.exception("가격정보 조회 실패: %s", e)
             return None
 
@@ -206,19 +227,51 @@ async def api_analyze(
         if not history_no:
             return None
         try:
-            data = await traceability_service.fetch_traceability(history_no)
+            data = await traceability_service.fetch_traceability(history_no, part_name=part_name)
             if data:
                 return TraceabilityInfo(
-                    birth_date=data.get("birth_date"),
-                    slaughterDate=data.get("slaughterDate"),
-                    grade=data.get("grade"),
-                    origin=data.get("origin"),
-                    partName=data.get("partName"),
-                    companyName=data.get("companyName"),
                     historyNo=data.get("historyNo"),
-                    source=data.get("source", "fallback"),
+                    blNo=data.get("blNo"),
+                    partName=data.get("partName"),
+                    origin=data.get("origin"),
+                    slaughterDate=data.get("slaughterDate"),
+                    slaughterDateFrom=data.get("slaughterDateFrom"),
+                    slaughterDateTo=data.get("slaughterDateTo"),
+                    processingDateFrom=data.get("processingDateFrom"),
+                    processingDateTo=data.get("processingDateTo"),
+                    exporter=data.get("exporter"),
+                    importer=data.get("importer"),
+                    importDate=data.get("importDate"),
+                    partCode=data.get("partCode"),
+                    companyName=data.get("companyName"),
+                    recommendedExpiry=data.get("recommendedExpiry"),
+                    limitFromDt=data.get("limitFromDt"),
+                    limitToDt=data.get("limitToDt"),
+                    refrigCnvrsAt=data.get("refrigCnvrsAt"),
+                    refrigDistbPdBeginDe=data.get("refrigDistbPdBeginDe"),
+                    refrigDistbPdEndDe=data.get("refrigDistbPdEndDe"),
+                    birth_date=data.get("birth_date"),
+                    grade=data.get("grade"),
+                    source=data.get("source", "api"),
+                    server_maintenance=data.get("server_maintenance", False),
                 )
+        except httpx.TimeoutException as e:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+            print(f"🚨 [DETAILS]: 이력제 API Timeout (이력번호: {history_no}) - {str(e)}")
+            print("=" * 50)
+            logger.exception("이력제 API Timeout: %s", e)
+        except httpx.HTTPStatusError as e:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+            print(f"🚨 [DETAILS]: 이력제 API HTTP {e.response.status_code} (이력번호: {history_no}) - {str(e)}")
+            print("=" * 50)
+            logger.exception("이력제 API HTTP Error: %s", e)
         except Exception as e:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
+            print(f"🚨 [DETAILS]: 이력제 API {type(e).__name__} (이력번호: {history_no}) - {str(e)}")
+            print("=" * 50)
             logger.exception("이력제 조회 실패: %s", e)
         return None
 
@@ -227,6 +280,52 @@ async def api_analyze(
         _fetch_price(),
         _fetch_traceability(),
     )
+    
+    # 등급별 + 세부부위별 영양정보 조회
+    nutrition_by_grade: list[NutritionInfoByGrade] | None = None
+    if part_name:
+        try:
+            nutrition_data = await nutrition_service.fetch_nutrition(part_name, db=db)
+            if "by_grade" in nutrition_data and nutrition_data["by_grade"]:
+                nutrition_by_grade = []
+                for item in nutrition_data["by_grade"]:
+                    # 세부부위별 영양정보 변환
+                    by_subpart_list = []
+                    if "by_subpart" in item and item["by_subpart"]:
+                        for subpart_item in item["by_subpart"]:
+                            by_subpart_list.append(
+                                NutritionInfoBySubpart(
+                                    subpart=subpart_item.get("subpart", "기본"),
+                                    nutrition=NutritionInfo(
+                                        calories=subpart_item["nutrition"].get("calories"),
+                                        protein=subpart_item["nutrition"].get("protein"),
+                                        fat=subpart_item["nutrition"].get("fat"),
+                                        carbohydrate=subpart_item["nutrition"].get("carbohydrate"),
+                                        source=subpart_item["nutrition"].get("source", "api"),
+                                        grade=subpart_item["nutrition"].get("grade"),
+                                    ),
+                                )
+                            )
+                    
+                    # 등급별 영양정보 (기본값 + 세부부위 목록)
+                    nutrition_by_grade.append(
+                        NutritionInfoByGrade(
+                            grade=item["grade"],
+                            nutrition=NutritionInfo(
+                                calories=item["nutrition"].get("calories"),
+                                protein=item["nutrition"].get("protein"),
+                                fat=item["nutrition"].get("fat"),
+                                carbohydrate=item["nutrition"].get("carbohydrate"),
+                                source=item["nutrition"].get("source", "api"),
+                                grade=item["nutrition"].get("grade"),
+                            ),
+                            bySubpart=by_subpart_list,
+                        )
+                    )
+                print(f"✅ 등급별 영양정보 변환 완료: {part_name} (등급 {len(nutrition_by_grade)}개, 총 세부부위 {sum(len(g.bySubpart) for g in nutrition_by_grade)}개)")
+        except Exception as e:
+            print(f"🚨 [REAL ERROR] 등급별 영양정보 조회 실패: {e}")
+            logger.warning(f"등급별 영양정보 조회 실패: {e}")
 
     # 게스트 모드: guest_id가 있으면 게스트 멤버 찾기 또는 생성
     if not member and guest_id:
@@ -266,21 +365,42 @@ async def api_analyze(
 
         # 냉장고에 자동 추가 (이력제는 이미 병렬로 조회됨)
         fridge_item_id = None
-        if part_name and auto_add_fridge:
-            meat_result = await db.execute(
-                select(MeatInfo).where(MeatInfo.part_name == part_name).limit(1)
-            )
-            meat = meat_result.scalar_one_or_none()
+        if auto_add_fridge and member:
+            meat = None
+            if part_name:
+                meat_result = await db.execute(
+                    select(MeatInfo).where(MeatInfo.part_name == part_name).limit(1)
+                )
+                meat = meat_result.scalar_one_or_none()
+            if not meat and traceability_info and getattr(traceability_info, "partName", None):
+                # OCR만 이력번호만 반환한 경우: 이력 품목명(돼지/소)으로 meat_info 결정
+                p = (traceability_info.partName or "").lower()
+                if "돼지" in p or "pork" in p:
+                    r = await db.execute(select(MeatInfo).where(MeatInfo.category == "pork").limit(1))
+                    meat = r.scalar_one_or_none()
+                if not meat and ("소" in p or "beef" in p or "쇠" in p):
+                    r = await db.execute(select(MeatInfo).where(MeatInfo.category == "beef").limit(1))
+                    meat = r.scalar_one_or_none()
+                if not meat:
+                    r = await db.execute(select(MeatInfo).limit(1))
+                    meat = r.scalar_one_or_none()
             if meat:
                 recognition_date_only = recognition_date.date()
                 expiry_date = recognition_date_only + timedelta(days=3)
+                if traceability_info and getattr(traceability_info, "recommendedExpiry", None):
+                    try:
+                        expiry_date = datetime.strptime(
+                            str(traceability_info.recommendedExpiry)[:10], "%Y-%m-%d"
+                        ).date()
+                    except (ValueError, TypeError):
+                        pass
 
                 slaughter_date = None
                 grade = None
                 origin = None
                 company_name = None
                 if traceability_info:
-                    slaughter_date_str = traceability_info.slaughterDate
+                    slaughter_date_str = getattr(traceability_info, "slaughterDate", None) or getattr(traceability_info, "slaughterDateFrom", None)
                     if slaughter_date_str:
                         try:
                             slaughter_date = datetime.strptime(slaughter_date_str, "%Y-%m-%d").date()
@@ -316,8 +436,8 @@ async def api_analyze(
                     member_id=member.id,
                     fridge_item_id=fridge_item_id,
                     notification_type="expiry_alert",
-                    title=f"{part_name} 유통기한 임박",
-                    body=f"{part_name}의 유통기한이 {expiry_date}입니다.",
+                    title=f"{meat.part_name} 유통기한 임박",
+                    body=f"{meat.part_name}의 유통기한이 {expiry_date}입니다.",
                     scheduled_at=alert_time,
                     status="pending",
                 )
@@ -331,7 +451,7 @@ async def api_analyze(
         heatmap_image=heatmap_image,
         raw=out.get("raw"),
         nutrition=nutrition_info,
+        nutritionByGrade=nutrition_by_grade,
         price=price_info,
         traceability=traceability_info,
     )
-

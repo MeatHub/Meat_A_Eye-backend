@@ -17,13 +17,17 @@ from ...models.recognition_log import RecognitionLog
 from ...models.fridge_item import FridgeItem
 from ...models.meat_info import MeatInfo
 from ...models.web_notification import WebNotification
-from ...schemas.ai import AIAnalyzeResponse, AIMode
-from ...services.ai_proxy import AIProxyService
+from ...schemas.ai import AIAnalyzeResponse, AIMode, NutritionInfo, PriceInfo, TraceabilityInfo
+from ...apis import AIProxyService
 from ...services.traceability import fetch_traceability
+from ...services.nutrition_service import NutritionService
+from ...services.price_service import PriceService
 from ...middleware.jwt import get_current_user
 
 router = APIRouter()
 ai_proxy = AIProxyService()
+nutrition_service = NutritionService()
+price_service = PriceService()
 
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -96,13 +100,28 @@ async def ai_analyze(
     traceability_data = None
     if history_no:
         try:
-            traceability_list = await fetch_traceability(history_no)
+            traceability_list = await fetch_traceability(history_no, part_name=part_name)
             if traceability_list and len(traceability_list) > 0:
-                traceability_data = traceability_list[0]  # 첫 번째 결과 사용
+                traceability_data = traceability_list[0]
                 logger.info(f"이력제 정보 조회 성공: {traceability_data}")
         except Exception as e:
             logger.exception(f"이력제 API 호출 실패: {e}")
-            # 이력제 API 실패해도 계속 진행 (Mock 응답 가능)
+
+    # 영양정보 API 호출 (part_name이 있는 경우)
+    nutrition_data = None
+    if part_name:
+        try:
+            nutrition_data = await nutrition_service.fetch_nutrition(part_name, db=db)
+        except Exception as e:
+            logger.exception(f"영양정보 API 호출 실패: {e}")
+
+    # 가격정보 API 호출 (part_name이 있는 경우)
+    price_data = None
+    if part_name:
+        try:
+            price_data = await price_service.fetch_current_price(part_name=part_name, region="seoul", db=db)
+        except Exception as e:
+            logger.exception(f"가격정보 API 호출 실패: {e}")
 
     fridge_item_id = None
     # part_name이 있고 auto_add_fridge가 True면 자동으로 냉장고에 추가 (인식일 +3일)
@@ -111,8 +130,13 @@ async def ai_analyze(
         meat = meat_result.scalar_one_or_none()
         if meat:
             recognition_date_only = recognition_date.date()
-            expiry_date = recognition_date_only + timedelta(days=3)  # 인식일 +3일
-            
+            expiry_date = recognition_date_only + timedelta(days=3)
+            if traceability_data and traceability_data.get("recommendedExpiry"):
+                try:
+                    expiry_date = datetime.strptime(str(traceability_data.get("recommendedExpiry"))[:10], "%Y-%m-%d").date()
+                except (ValueError, TypeError):
+                    pass
+
             # 이력제 정보에서 도축일자, 등급 추출
             slaughter_date = None
             grade = None
@@ -120,8 +144,7 @@ async def ai_analyze(
             company_name = None
             
             if traceability_data:
-                # 도축일자 파싱 (YYYY-MM-DD 형식 가정)
-                slaughter_date_str = traceability_data.get("slaughterDate")
+                slaughter_date_str = traceability_data.get("slaughterDate") or traceability_data.get("slaughterDateFrom")
                 if slaughter_date_str:
                     try:
                         slaughter_date = datetime.strptime(slaughter_date_str, "%Y-%m-%d").date()
@@ -167,11 +190,65 @@ async def ai_analyze(
             db.add(notification)
             await db.flush()
 
+    # AIAnalyzeResponse 스키마로 4개 API 데이터 통합
+    nutrition_info = None
+    if nutrition_data:
+        nutrition_info = NutritionInfo(
+            calories=nutrition_data.get("calories"),
+            protein=nutrition_data.get("protein"),
+            fat=nutrition_data.get("fat"),
+            carbohydrate=nutrition_data.get("carbohydrate"),
+            source=nutrition_data.get("source", "api"),
+        )
+
+    price_info = None
+    if price_data:
+        price_info = PriceInfo(
+            currentPrice=price_data.get("currentPrice", 0),
+            priceUnit=price_data.get("unit", "100g"),
+            priceTrend=price_data.get("trend", "flat"),
+            priceDate=price_data.get("price_date"),
+            priceSource=price_data.get("source", "api"),
+            gradePrices=price_data.get("gradePrices", []),
+        )
+
+    traceability_info = None
+    if traceability_data:
+        traceability_info = TraceabilityInfo(
+            historyNo=traceability_data.get("historyNo") or history_no,
+            blNo=traceability_data.get("blNo"),
+            partName=traceability_data.get("partName"),
+            origin=traceability_data.get("origin"),
+            slaughterDate=traceability_data.get("slaughterDate"),
+            slaughterDateFrom=traceability_data.get("slaughterDateFrom"),
+            slaughterDateTo=traceability_data.get("slaughterDateTo"),
+            processingDateFrom=traceability_data.get("processingDateFrom"),
+            processingDateTo=traceability_data.get("processingDateTo"),
+            exporter=traceability_data.get("exporter"),
+            importer=traceability_data.get("importer"),
+            importDate=traceability_data.get("importDate"),
+            partCode=traceability_data.get("partCode"),
+            companyName=traceability_data.get("companyName"),
+            recommendedExpiry=traceability_data.get("recommendedExpiry"),
+            limitFromDt=traceability_data.get("limitFromDt"),
+            limitToDt=traceability_data.get("limitToDt"),
+            refrigCnvrsAt=traceability_data.get("refrigCnvrsAt"),
+            refrigDistbPdBeginDe=traceability_data.get("refrigDistbPdBeginDe"),
+            refrigDistbPdEndDe=traceability_data.get("refrigDistbPdEndDe"),
+            birth_date=traceability_data.get("birth_date"),
+            grade=traceability_data.get("grade"),
+            source=traceability_data.get("source", "api"),
+        )
+
     return AIAnalyzeResponse(
         partName=part_name,
         confidence=confidence,
         historyNo=history_no,
+        heatmap_image=out.get("heatmap_image"),
         raw=out.get("raw"),
+        nutrition=nutrition_info,
+        price=price_info,
+        traceability=traceability_info,
     )
 
 
@@ -197,26 +274,44 @@ async def generate_recipe(
     member: Annotated[Member, Depends(get_current_user)],
 ):
     """현재 냉장고의 고기 리스트를 기반으로 LLM 레시피 생성"""
-    # 냉장고 아이템 가져오기
-    q = (
-        select(FridgeItem)
-        .where(FridgeItem.member_id == member.id)
-        .where(FridgeItem.status == "stored")
-        .options(selectinload(FridgeItem.meat_info))
-    )
-    result = await db.execute(q)
-    items = result.scalars().all()
-    
-    # 고기 부위 리스트 추출
-    meat_parts = []
-    for item in items:
-        if item.meat_info:
-            meat_parts.append(item.meat_info.part_name)
-    
-    if not meat_parts:
-        return LLMRecipeResponse(
-            recipe="# 레시피 추천\n\n현재 냉장고에 보관 중인 고기가 없습니다. 고기를 추가한 후 다시 시도해주세요."
+    try:
+        # 냉장고 아이템 가져오기
+        q = (
+            select(FridgeItem)
+            .where(FridgeItem.member_id == member.id)
+            .where(FridgeItem.status == "stored")
+            .options(selectinload(FridgeItem.meat_info))
         )
+        result = await db.execute(q)
+        items = result.scalars().all()
+        
+        # 고기 부위 리스트 추출
+        meat_parts = []
+        for item in items:
+            if item.meat_info:
+                meat_parts.append(item.meat_info.part_name)
+        
+        # 재료 리스트 출력 (강력한 로깅)
+        print("=" * 50)
+        print(f"🚨 [레시피 생성] DB에서 가져온 재료 리스트:")
+        print(f"🚨 [DETAILS]: {meat_parts}")
+        print("=" * 50)
+        
+        if not meat_parts:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: /api/v1/ai/recipe")
+            print(f"🚨 [DETAILS]: 냉장고에 고기 없음 (member_id: {member.id})")
+            print("=" * 50)
+            return LLMRecipeResponse(
+                recipe="# 레시피 추천\n\n현재 냉장고에 보관 중인 고기가 없습니다. 고기를 추가한 후 다시 시도해주세요."
+            )
+    except Exception as e:
+        print("=" * 50)
+        print(f"🚨 [REAL ERROR] Endpoint: /api/v1/ai/recipe")
+        print(f"🚨 [DETAILS]: DB 조회 실패 - {type(e).__name__}: {str(e)}")
+        print("=" * 50)
+        logger.exception(f"냉장고 조회 실패: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"냉장고 조회 실패: {str(e)}")
     
     # LLM API 호출 (OpenAI 또는 Gemini)
     openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -261,6 +356,10 @@ async def generate_recipe(
             )
             recipe_text = response.choices[0].message.content
         except Exception as e:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: /api/v1/ai/recipe")
+            print(f"🚨 [DETAILS]: OpenAI API 호출 실패 - {type(e).__name__}: {str(e)}")
+            print("=" * 50)
             logger.exception(f"OpenAI API 호출 실패: {e}")
             recipe_text = f"# 레시피 추천\n\n현재 냉장고에 있는 고기: {meat_list_str}\n\n레시피 생성 중 오류가 발생했습니다."
     
@@ -273,11 +372,19 @@ async def generate_recipe(
             response = model.generate_content(prompt)
             recipe_text = response.text
         except Exception as e:
+            print("=" * 50)
+            print(f"🚨 [REAL ERROR] Endpoint: /api/v1/ai/recipe")
+            print(f"🚨 [DETAILS]: Gemini API 호출 실패 - {type(e).__name__}: {str(e)}")
+            print("=" * 50)
             logger.exception(f"Gemini API 호출 실패: {e}")
             recipe_text = f"# 레시피 추천\n\n현재 냉장고에 있는 고기: {meat_list_str}\n\n레시피 생성 중 오류가 발생했습니다."
     
     # LLM API가 없으면 기본 레시피 반환
     else:
+        print("=" * 50)
+        print(f"🚨 [REAL ERROR] Endpoint: /api/v1/ai/recipe")
+        print(f"🚨 [DETAILS]: LLM API 키 없음 (OPENAI_API_KEY, GEMINI_API_KEY 모두 없음)")
+        print("=" * 50)
         recipe_text = f"""# 고기 레시피 추천
 
 현재 냉장고에 있는 고기: {meat_list_str}
