@@ -77,6 +77,16 @@ def _ensure_list(value: Any) -> list:
 # KAMIS
 # ---------------------------------------------------------------------------
 
+# 등급코드 매핑 (KAMIS API용)
+GRADE_CODE_MAP: dict[str, str] = {
+    "00": "전체",  # 전체 평균
+    "01": "1++등급",
+    "02": "1+등급",
+    "03": "1등급",
+    "81": "미국산",
+    "82": "호주산",
+}
+
 PART_TO_CODES: dict[str, dict[str, Any]] = {
     # 소(국내) - itemcode 4301
     "Beef_Tenderloin": {
@@ -85,6 +95,7 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "category": "500",
         "food_nm": "소/안심",
         "grades": ["1++등급", "1+등급", "1등급", "2등급", "3등급", "일반"],
+        "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"},
     },
     "Beef_Ribeye": {
         "itemcode": "4301",
@@ -92,6 +103,7 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "category": "500",
         "food_nm": "소/등심",
         "grades": ["1++등급", "1+등급", "1등급", "2등급", "3등급", "일반"],
+        "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"},
     },
     "Beef_Sirloin": {
         "itemcode": "4301",
@@ -123,17 +135,19 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
     },
     "Beef_BottomRound": {
         "itemcode": "4301",
-        "kindcode": "26",
+        "kindcode": "36",
         "category": "500",
         "food_nm": "소/설도",
         "grades": ["1++등급", "1+등급", "1등급", "2등급", "3등급", "일반"],
+        "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"},
     },
     "Beef_Brisket": {
         "itemcode": "4301",
-        "kindcode": "28",
+        "kindcode": "40",
         "category": "500",
         "food_nm": "소/양지",
         "grades": ["1++등급", "1+등급", "1등급", "2등급", "3등급", "일반"],
+        "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"},
     },
     "Beef_Shank": {
         "itemcode": "4301",
@@ -148,6 +162,7 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "category": "500",
         "food_nm": "소/갈비",
         "grades": ["1++등급", "1+등급", "1등급", "일반"],
+        "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"},
     },
     # 돼지(국내) - itemcode 4304
     "Pork_Shoulder": {
@@ -156,6 +171,7 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "category": "500",
         "food_nm": "돼지/앞다리",
         "grades": ["일반"],
+        "grade_codes": {"00": "전체"},
     },
     "Pork_Belly": {
         "itemcode": "4304",
@@ -163,6 +179,7 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "category": "500",
         "food_nm": "돼지/삼겹살",
         "grades": ["일반"],
+        "grade_codes": {"00": "전체"},
     },
     "Pork_Rib": {
         "itemcode": "4304",
@@ -170,6 +187,7 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "category": "500",
         "food_nm": "돼지/갈비",
         "grades": ["일반"],
+        "grade_codes": {"00": "전체"},
     },
     "Pork_Loin": {
         "itemcode": "4304",
@@ -177,6 +195,7 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "category": "500",
         "food_nm": "돼지/목심",
         "grades": ["일반"],
+        "grade_codes": {"00": "전체"},
     },
 }
 
@@ -185,12 +204,14 @@ def _get_codes(part_name: str) -> dict[str, Any]:
     if part_name in PART_TO_CODES:
         data = PART_TO_CODES[part_name].copy()
         data.setdefault("grades", ["일반"])
+        data.setdefault("grade_codes", {"00": "전체"})
         return data
     lower = (part_name or "").lower()
     for key, value in PART_TO_CODES.items():
         if key.lower() in lower or lower in key.lower():
             data = value.copy()
             data.setdefault("grades", ["일반"])
+            data.setdefault("grade_codes", {"00": "전체"})
             return data
     if "_" in lower:
         prefix = lower.split("_", 1)[0]
@@ -201,6 +222,7 @@ def _get_codes(part_name: str) -> dict[str, Any]:
                 "category": "500",
                 "food_nm": "소",
                 "grades": ["1++등급", "1+등급", "1등급", "2등급", "3등급", "일반"],
+                "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"},
             }
         if prefix == "pork":
             return {
@@ -209,20 +231,40 @@ def _get_codes(part_name: str) -> dict[str, Any]:
                 "category": "500",
                 "food_nm": "돼지",
                 "grades": ["일반"],
+                "grade_codes": {"00": "전체"},
             }
-    return {"itemcode": "", "kindcode": "", "category": "500", "food_nm": part_name, "grades": ["일반"]}
+    return {
+        "itemcode": "",
+        "kindcode": "",
+        "category": "500",
+        "food_nm": part_name,
+        "grades": ["일반"],
+        "grade_codes": {"00": "전체"},
+    }
 
 
-async def fetch_kamis_price(part_name: str, region: str = "seoul") -> dict[str, Any]:
+async def fetch_kamis_price(
+    part_name: str,
+    region: str = "전국",
+    grade_code: str = "00",
+) -> dict[str, Any]:
+    """
+    KAMIS API로 시세 조회
+    
+    Args:
+        part_name: 고기 부위명
+        region: 지역코드 (기본값: "전국" - 전체지역)
+        grade_code: 등급코드 (기본값: "00" - 전체 평균)
+    """
     key = (settings.kamis_api_key or "").strip()
-    cert_id = (settings.kamis_cert_id or "meat-a-eye").strip()
+    cert_id = (settings.kamis_cert_id or "pak101044").strip()
     if not key:
         raise HTTPException(status_code=503, detail="KAMIS API 키가 설정되지 않았습니다.")
 
     base = (settings.kamis_api_url or "https://www.kamis.or.kr/service/price/xml.do").strip()
     today = date.today()
     end_day = today.strftime("%Y-%m-%d")
-    start_day = (today - timedelta(days=6)).strftime("%Y-%m-%d")
+    start_day = (today - timedelta(days=7)).strftime("%Y-%m-%d")  # 7일전
 
     codes = _get_codes(part_name)
     if (part_name not in PART_TO_CODES and codes.get("food_nm") == part_name) or not codes.get("itemcode"):
@@ -230,19 +272,25 @@ async def fetch_kamis_price(part_name: str, region: str = "seoul") -> dict[str, 
             status_code=404,
             detail=f"{part_name} 실시간 데이터를 알 수 없습니다.",
         )
+    
+    # 지역코드 매핑 (전국 = 빈 문자열)
+    county_code = "" if region == "전국" else region
+    
+    # 등급코드 "00" (전체 평균)일 때는 등급코드를 빈 문자열로 보내서 모든 등급 데이터 조회
+    # 그 후 클라이언트에서 평균 계산
+    product_rank_code = "" if grade_code == "00" else grade_code
+    
     params = {
         "action": "periodProductList",
         "p_cert_key": key,
         "p_cert_id": cert_id,
-        "p_returntype": "xml",
+        "p_returntype": "json",  # json으로 변경
         "p_startday": start_day,
         "p_endday": end_day,
-        "p_productclscode": "01",
-        "p_itemcategorycode": codes.get("category", "500"),
         "p_itemcode": codes.get("itemcode", ""),
         "p_kindcode": codes.get("kindcode", ""),
-        "p_productrankcode": "",
-        "p_countrycode": "",
+        "p_productrankcode": product_rank_code,  # 등급코드 (00일 때는 빈 문자열)
+        "p_countycode": county_code,  # 지역코드 추가
         "p_convert_kg_yn": "N",
     }
 
@@ -252,9 +300,10 @@ async def fetch_kamis_price(part_name: str, region: str = "seoul") -> dict[str, 
             print("DEBUG: REAL API REQUEST KAMIS | Full URL:")
             print(f"  {req.url}")
             resp = await client.send(req)
-            print(f"DEBUG: REAL API RESPONSE KAMIS | status={resp.status_code} | body_preview={resp.text[:150]}...")
+            print(f"DEBUG: REAL API RESPONSE KAMIS | status={resp.status_code} | body_preview={resp.text[:500]}...")
             resp.raise_for_status()
             payload = resp.text
+            print(f"DEBUG: FULL RESPONSE LENGTH: {len(payload)} bytes")
     except httpx.HTTPStatusError as exc:
         print(f"🚨 [REAL ERROR] {exc}")
         raise HTTPException(status_code=503, detail=f"KAMIS API 연결 실패: HTTP {exc.response.status_code}") from exc
@@ -263,6 +312,21 @@ async def fetch_kamis_price(part_name: str, region: str = "seoul") -> dict[str, 
         raise HTTPException(status_code=503, detail=f"KAMIS API 연결 실패: {exc}") from exc
 
     parsed = _parse_response(payload, "KAMIS")
+    print(f"DEBUG: PARSED RESPONSE KEYS: {list(parsed.keys()) if isinstance(parsed, dict) else 'NOT A DICT'}")
+    print(f"DEBUG: PARSED RESPONSE TYPE: {type(parsed)}")
+    if isinstance(parsed, dict):
+        if "document" in parsed:
+            doc_data = parsed.get("document", {})
+            print(f"DEBUG: document.data exists: {'data' in doc_data}")
+            if "data" in doc_data:
+                data = doc_data.get("data", {})
+                print(f"DEBUG: data.item exists: {'item' in data}")
+                if "item" in data:
+                    items_preview = data.get("item", [])
+                    print(f"DEBUG: data.item type: {type(items_preview)}, length: {len(items_preview) if isinstance(items_preview, list) else 'N/A'}")
+        if "data" in parsed:
+            top_data = parsed.get("data", {})
+            print(f"DEBUG: top-level data.item exists: {'item' in top_data}")
 
     def _collect_items(node: Any) -> list:
         collected: list = []
@@ -278,25 +342,68 @@ async def fetch_kamis_price(part_name: str, region: str = "seoul") -> dict[str, 
         return collected
 
     items: list[dict[str, Any]] = []
+    
+    # XML 응답 처리 (document.data.item 구조)
     if "document" in parsed:
         document = parsed.get("document", {}) or {}
-        error_code = str(document.get("error_code", "000"))
-        if error_code not in ("0", "000"):
-            print(f"🚨 [REAL ERROR] KAMIS 오류 코드: {error_code}")
-            raise HTTPException(status_code=502, detail=f"KAMIS 오류 코드: {error_code}")
-        items = _collect_items(document)
-    elif "data" in parsed:
-        data = parsed.get("data", {})
-        if isinstance(data, dict) and data.get("error_code") == "000":
+        # document 내부의 data 확인
+        data = document.get("data", {})
+        if isinstance(data, dict):
+            error_code = str(data.get("error_code", "000"))
+            if error_code not in ("0", "000"):
+                error_msg = data.get("error_msg", "") or data.get("message", "")
+                print(f"🚨 [REAL ERROR] KAMIS 오류 코드: {error_code}, 메시지: {error_msg}")
+                raise HTTPException(status_code=502, detail=f"KAMIS 오류 코드: {error_code} - {error_msg}")
+            # document.data.item 배열에서 실제 가격 데이터 가져오기
             items = _ensure_list(data.get("item"))
+            print(f"DEBUG: Found {len(items)} items from 'document.data.item' key")
+        
+        # document.data에서 찾지 못한 경우, document 전체에서 재귀적으로 검색
+        if not items:
+            items = _collect_items(document)
+            print(f"DEBUG: Found {len(items)} items from 'document' (recursive search)")
+    
+    # JSON 응답 처리 - 실제 데이터는 "data.item" 배열에 있음 (최상위 레벨)
+    if not items and "data" in parsed:
+        data = parsed.get("data", {})
+        if isinstance(data, dict):
+            error_code = str(data.get("error_code", "000"))
+            if error_code not in ("0", "000"):
+                error_msg = data.get("error_msg", "") or data.get("message", "")
+                print(f"🚨 [REAL ERROR] KAMIS 오류 코드: {error_code}, 메시지: {error_msg}")
+                raise HTTPException(status_code=502, detail=f"KAMIS 오류 코드: {error_code} - {error_msg}")
+            # data.item 배열에서 실제 가격 데이터 가져오기
+            items = _ensure_list(data.get("item"))
+            if not items and isinstance(data.get("item"), list):
+                items = data.get("item", [])
+        print(f"DEBUG: Found {len(items)} items from top-level 'data.item' key")
+    
+    # 파싱된 응답이 비어있거나 예상과 다른 경우
+    if not items:
+        print(f"⚠️ [WARNING] KAMIS 응답 형식이 예상과 다릅니다. parsed keys: {list(parsed.keys()) if isinstance(parsed, dict) else 'NOT A DICT'}")
+        # 최상위 레벨에서 item을 찾아봄
+        if isinstance(parsed, dict) and "item" in parsed:
+            items = _ensure_list(parsed.get("item"))
+            print(f"DEBUG: Found {len(items)} items from top-level 'item' key")
 
     grade_prices: list[dict[str, Any]] = []
     grade_seen: set[str] = set()
     target_name = codes.get("food_nm", "")
 
     def _extract_grade(name: str) -> str:
+        """제품명에서 등급 정보 추출"""
+        if not name:
+            return "일반"
+        # 괄호 안의 등급 정보 추출 (예: "소/등심(1++등급)" -> "1++등급")
         if "(" in name and ")" in name:
-            return name.split("(", 1)[1].split(")", 1)[0]
+            grade_in_paren = name.split("(", 1)[1].split(")", 1)[0]
+            if grade_in_paren:
+                return grade_in_paren
+        # 등급 키워드 직접 검색
+        grade_keywords = ["1++등급", "1+등급", "1등급", "2등급", "3등급", "전체"]
+        for keyword in grade_keywords:
+            if keyword in name:
+                return keyword
         return "일반"
 
     def _trend_from_direction(value: Any) -> str:
@@ -306,18 +413,73 @@ async def fetch_kamis_price(part_name: str, region: str = "seoul") -> dict[str, 
     for item in items:
         if not isinstance(item, dict):
             continue
-        product_name = str(item.get("productName") or item.get("item_name") or "")
-        if target_name and target_name not in product_name:
-            continue
+        # JSON 응답 필드명: itemname, kindname, price, regday 등
+        # XML 응답 필드명: productName, item_name, dpr1, regday 등
+        # KAMIS API 응답에서 itemname과 kindname이 빈 배열 []로 올 수 있음
+        # 이미 itemcode와 kindcode로 필터링된 데이터이므로 제품명 매칭 불필요
+        itemname_val = item.get("itemname")
+        kindname_val = item.get("kindname")
+        
+        # 빈 배열이거나 리스트인 경우 처리
+        if isinstance(itemname_val, list):
+            itemname_val = itemname_val[0] if itemname_val else ""
+        elif itemname_val is None:
+            itemname_val = ""
+        else:
+            itemname_val = str(itemname_val)
+            
+        if isinstance(kindname_val, list):
+            kindname_val = kindname_val[0] if kindname_val else ""
+        elif kindname_val is None:
+            kindname_val = ""
+        else:
+            kindname_val = str(kindname_val)
+        
+        product_name = str(
+            item.get("productName")
+            or itemname_val
+            or item.get("item_name")
+            or kindname_val
+            or item.get("productname")
+            or ""
+        )
+        
+        # itemcode와 kindcode로 이미 필터링된 데이터이므로 제품명 매칭 건너뛰기
+        # 제품명이 비어있으면 (itemname/kindname이 빈 배열인 경우) 매칭 체크 완전히 건너뛰기
+        # 제품명이 있고 명시적으로 다른 제품인 경우만 제외
+        if target_name and product_name and product_name.strip():
+            # 제품명이 명시적으로 다른 경우만 제외 (예: "소/등심" vs "돼지/삼겹살")
+            target_parts = target_name.replace("/", " ").split()
+            product_parts = product_name.replace("/", " ").split()
+            # 타겟의 주요 키워드가 제품명에 없는 경우만 제외
+            if len(target_parts) > 0 and len(product_parts) > 0:
+                main_keyword = target_parts[-1]  # "등심", "갈비" 등
+                product_keyword = product_parts[-1]
+                # 완전히 다른 제품인 경우만 제외 (예: "등심" vs "삼겹살")
+                if main_keyword != product_keyword and product_keyword:
+                    print(f"DEBUG: 제품명 불일치 | target={target_name} | product={product_name} | keyword={main_keyword}")
+                    continue
         unit = (item.get("unit") or "").lower()
-        if "100g" not in unit:
+        # JSON 응답에서는 단위 정보가 없을 수 있으므로 100g 체크 완화
+        # 단위가 없거나 100g가 아닌 경우도 허용 (API 응답 형식에 따라 다를 수 있음)
+        # 단, 명시적으로 다른 단위(kg 등)인 경우만 제외
+        if unit and unit not in ("", "100g", "100g당", "100g/원") and "kg" in unit:
             continue
-        raw_price = item.get("price") or item.get("dpr1") or item.get("dpr0") or item.get("avgPrc")
+        raw_price = (
+            item.get("price")
+            or item.get("dpr1")
+            or item.get("dpr0")
+            or item.get("avgPrc")
+            or item.get("value")  # 추가
+            or item.get("priceValue")  # 추가
+        )
+        print(f"DEBUG: Item | name={product_name} | price={raw_price} | unit={item.get('unit', 'N/A')}")
         try:
             price_value = int(float(str(raw_price).replace(",", "")))
         except (TypeError, ValueError):
             price_value = 0
         if price_value <= 0:
+            print(f"DEBUG: 가격이 0 이하이므로 스킵 | price={raw_price}")
             continue
         grade = _extract_grade(product_name)
         if grade in grade_seen:
@@ -328,7 +490,12 @@ async def fetch_kamis_price(part_name: str, region: str = "seoul") -> dict[str, 
                 "grade": grade,
                 "price": price_value,
                 "unit": "100g",
-                "priceDate": item.get("lastest_day") or item.get("regday") or end_day,
+                "priceDate": (
+                    item.get("lastest_day")
+                    or item.get("regday")
+                    or item.get("yyyy", "") + "/" + item.get("regday", "")
+                    or end_day
+                ),
                 "trend": _trend_from_direction(item.get("direction")),
             }
         )
@@ -344,8 +511,47 @@ async def fetch_kamis_price(part_name: str, region: str = "seoul") -> dict[str, 
     grade_order = {grade: idx for idx, grade in enumerate(codes.get("grades", []))}
     grade_prices.sort(key=lambda x: grade_order.get(x["grade"], 99))
     debug_summary = ", ".join(f"{gp['grade']}:{gp['price']}" for gp in grade_prices)
-    print(f"DEBUG: REAL API PARSED KAMIS | gradePrices=[{debug_summary}]")
-    primary = grade_prices[0]
+    print(f"DEBUG: REAL API PARSED KAMIS | gradeCode={grade_code} | gradePrices=[{debug_summary}]")
+    
+    # 등급코드에 맞는 가격 선택
+    primary = None
+    if grade_code == "00":
+        # 전체 평균: 모든 등급의 평균 계산
+        if grade_prices:
+            avg_price = sum(gp["price"] for gp in grade_prices) / len(grade_prices)
+            primary = {
+                "grade": "전체 평균",
+                "price": int(avg_price),
+                "unit": grade_prices[0]["unit"],
+                "priceDate": grade_prices[0]["priceDate"],
+                "trend": grade_prices[0]["trend"],
+            }
+            print(f"DEBUG: 전체 평균 계산 | 평균가격={primary['price']}원 (등급 수={len(grade_prices)})")
+        else:
+            primary = grade_prices[0] if grade_prices else None
+    else:
+        # 특정 등급 선택: grade_code에 해당하는 등급 찾기
+        grade_code_map = codes.get("grade_codes", {})
+        target_grade_name = grade_code_map.get(grade_code, "")
+        
+        # 등급명으로 매칭 (예: "1++등급", "1+등급", "1등급")
+        for gp in grade_prices:
+            if target_grade_name and target_grade_name in gp["grade"]:
+                primary = gp
+                break
+        
+        # 매칭 실패 시 첫 번째 항목 사용
+        if not primary and grade_prices:
+            primary = grade_prices[0]
+            print(f"⚠️ [WARNING] 등급코드 {grade_code}에 해당하는 등급을 찾지 못함. 첫 번째 항목 사용: {primary['grade']}")
+    
+    if not primary:
+        target_label = codes.get("food_nm") or part_name
+        raise HTTPException(
+            status_code=404,
+            detail=f"{target_label} 실시간 데이터를 알 수 없습니다.",
+        )
+    
     return {
         "currentPrice": primary["price"],
         "unit": primary["unit"],
@@ -353,6 +559,7 @@ async def fetch_kamis_price(part_name: str, region: str = "seoul") -> dict[str, 
         "price_date": primary["priceDate"],
         "source": "api",
         "gradePrices": grade_prices,
+        "selectedGrade": primary.get("grade", "일반"),
     }
 
 
@@ -672,10 +879,15 @@ async def fetch_traceability(trace_no: str, part_name: str | None = None) -> dic
 
 class KamisService:
     """KAMIS 시세 서비스 (apis.fetch_kamis_price 래퍼)."""
-    
-    async def fetch_current_price(self, part_name: str, region: str = "seoul") -> dict[str, Any]:
+
+    async def fetch_current_price(
+        self,
+        part_name: str,
+        region: str = "전국",
+        grade_code: str = "00",
+    ) -> dict[str, Any]:
         """KAMIS API로 시세 조회."""
-        return await fetch_kamis_price(part_name, region)
+        return await fetch_kamis_price(part_name, region, grade_code)
 
 
 class AIProxyService:

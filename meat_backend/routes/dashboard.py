@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -47,52 +47,125 @@ class DashboardPricesResponse(BaseModel):
     summary="실시간 돼지/소 가격 (100g당)",
 )
 async def get_dashboard_prices(
+    region: str = "전국",
+    beef_part: str | None = None,
+    pork_part: str | None = None,
+    grade_code: str = "00",
     db: AsyncSession = Depends(get_db),
 ):
     """
     소(등심, 갈비), 돼지(삼겹, 목살) 대표 부위 100g당 가격 조회.
     market_prices 캐시 또는 KAMIS API 사용.
+    
+    Args:
+        region: 지역코드 (기본값: "전국")
+        beef_part: 소고기 부위 코드 (기본값: None - 전체, 특정 부위 선택 시 해당 부위만 조회)
+        pork_part: 돼지고기 부위 코드 (기본값: None - 전체, 특정 부위 선택 시 해당 부위만 조회)
+        grade_code: 등급코드 (기본값: "00" - 전체 평균)
+    
+    동작 방식:
+        - beef_part와 pork_part가 모두 None이면: 기본 부위 목록 반환 (전체 선택)
+        - beef_part만 지정되면: 해당 소고기 부위만 조회, 돼지고기는 조회하지 않음
+        - pork_part만 지정되면: 해당 돼지고기 부위만 조회, 소고기는 조회하지 않음
     """
-    beef_parts = [("Beef_Ribeye", "등심"), ("Beef_Rib", "갈비")]
-    pork_parts = [("Pork_Belly", "삼겹살"), ("Pork_Loin", "목살")]
+    # 기본 부위 목록 (테이블 구조에 맞춤: 품목명/품종명 형식)
+    default_beef_parts = [("Beef_Ribeye", "소/등심"), ("Beef_Rib", "소/갈비")]
+    default_pork_parts = [("Pork_Belly", "돼지/삼겹살"), ("Pork_Loin", "돼지/목심")]
+    
+    # 부위 필터 적용 - 부위 코드와 이름 매핑 (테이블 구조에 맞춤)
+    # 품목명/품종명 구조: 소/안심, 소/등심, 소/설도, 소/양지, 소/갈비
+    #                    돼지/앞다리, 돼지/삼겹살, 돼지/갈비, 돼지/목심
+    beef_part_map = {
+        "Beef_Tenderloin": "소/안심",  # itemcode 4301, kindcode 21
+        "Beef_Ribeye": "소/등심",      # itemcode 4301, kindcode 22
+        "Beef_BottomRound": "소/설도",  # itemcode 4301, kindcode 36
+        "Beef_Brisket": "소/양지",     # itemcode 4301, kindcode 40
+        "Beef_Rib": "소/갈비",         # itemcode 4301, kindcode 50
+    }
+    pork_part_map = {
+        "Pork_Shoulder": "돼지/앞다리",  # itemcode 4304, kindcode 25
+        "Pork_Belly": "돼지/삼겹살",    # itemcode 4304, kindcode 27
+        "Pork_Rib": "돼지/갈비",        # itemcode 4304, kindcode 28
+        "Pork_Loin": "돼지/목심",       # itemcode 4304, kindcode 68
+    }
+    
+    # 부위 필터링 로직:
+    # 1. 특정 부위가 선택된 경우: 해당 부위만 조회
+    # 2. 부위가 None인 경우: 기본 부위 목록 사용 (전체 선택 시)
+    # 3. 잘못된 코드인 경우: 빈 리스트 (조회하지 않음)
+    
+    # 소고기 부위 결정
+    if beef_part and beef_part in beef_part_map:
+        # 특정 소고기 부위 선택
+        beef_parts = [(beef_part, beef_part_map[beef_part])]
+    elif beef_part is None:
+        # beef_part가 None이고 pork_part도 None이면 기본 부위 목록 사용 (전체 선택)
+        # pork_part가 지정되어 있으면 소고기는 조회하지 않음
+        if pork_part is None:
+            beef_parts = default_beef_parts
+        else:
+            beef_parts = []  # 돼지고기만 선택된 경우 소고기는 조회하지 않음
+    else:
+        # 잘못된 beef_part 코드인 경우 빈 리스트
+        beef_parts = []
+    
+    # 돼지고기 부위 결정
+    if pork_part and pork_part in pork_part_map:
+        # 특정 돼지고기 부위 선택
+        pork_parts = [(pork_part, pork_part_map[pork_part])]
+    elif pork_part is None:
+        # pork_part가 None이고 beef_part도 None이면 기본 부위 목록 사용 (전체 선택)
+        # beef_part가 지정되어 있으면 돼지고기는 조회하지 않음
+        if beef_part is None:
+            pork_parts = default_pork_parts
+        else:
+            pork_parts = []  # 소고기만 선택된 경우 돼지고기는 조회하지 않음
+    else:
+        # 잘못된 pork_part 코드인 경우 빈 리스트
+        pork_parts = []
+    
     beef_items: List[PriceItem] = []
     pork_items: List[PriceItem] = []
 
     for code, name in beef_parts:
         try:
             data = await price_service.fetch_current_price(
-                part_name=code, region="seoul", db=db
+                part_name=code, region=region, grade_code=grade_code, db=db
             )
             if data.get("currentPrice", 0) > 0:
                 beef_items.append(
                     PriceItem(
-                        partName=name,
+                        partName=name or code,
                         category="beef",
                         currentPrice=data["currentPrice"],
                         unit=data.get("unit", "100g"),
                         priceDate=data.get("price_date"),
                     )
                 )
+        except HTTPException as e:
+            logger.warning("소 가격 조회 실패 (%s): HTTP %s - %s", name or code, e.status_code, e.detail)
         except Exception as e:
-            logger.warning("소 가격 조회 실패 (%s): %s", name, e)
+            logger.warning("소 가격 조회 실패 (%s): %s", name or code, e, exc_info=True)
 
     for code, name in pork_parts:
         try:
             data = await price_service.fetch_current_price(
-                part_name=code, region="seoul", db=db
+                part_name=code, region=region, grade_code=grade_code, db=db
             )
             if data.get("currentPrice", 0) > 0:
                 pork_items.append(
                     PriceItem(
-                        partName=name,
+                        partName=name or code,
                         category="pork",
                         currentPrice=data["currentPrice"],
                         unit=data.get("unit", "100g"),
                         priceDate=data.get("price_date"),
                     )
                 )
+        except HTTPException as e:
+            logger.warning("돼지 가격 조회 실패 (%s): HTTP %s - %s", name or code, e.status_code, e.detail)
         except Exception as e:
-            logger.warning("돼지 가격 조회 실패 (%s): %s", name, e)
+            logger.warning("돼지 가격 조회 실패 (%s): %s", name or code, e, exc_info=True)
 
     return DashboardPricesResponse(beef=beef_items, pork=pork_items)
 

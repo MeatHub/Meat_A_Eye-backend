@@ -21,12 +21,17 @@ class PriceService:
     async def fetch_current_price(
         self,
         part_name: str,
-        region: str = "seoul",
+        region: str = "전국",
+        grade_code: str = "00",
         db: AsyncSession | None = None,
     ) -> dict[str, Any]:
         """KAMIS API → DB 캐시. 모두 실패 시 HTTPException."""
         try:
-            api_data = await self.kamis.fetch_current_price(part_name=part_name, region=region)
+            api_data = await self.kamis.fetch_current_price(
+                part_name=part_name,
+                region=region,
+                grade_code=grade_code,
+            )
             if api_data.get("currentPrice", 0) > 0:
                 if db:
                     await self._save_to_db(db, part_name, region, api_data)
