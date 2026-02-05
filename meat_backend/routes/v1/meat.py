@@ -47,6 +47,57 @@ async def meat_prices(
 
 
 @router.get(
+    "/info/list",
+    response_model=list[MeatInfoResponse],
+    summary="MEAT-01b 고기 정보 목록 조회 (부위 선택용)",
+)
+async def meat_info_list(
+    category: str | None = Query(None, description="카테고리 필터 (beef/pork)"),
+    db: Annotated[AsyncSession, Depends(get_db)] = ...,
+):
+    """고기 부위 목록을 반환합니다. 냉장고 아이템 수정 시 부위 선택에 사용됩니다."""
+    q = select(MeatInfo)
+    if category:
+        q = q.where(MeatInfo.category == category)
+    q = q.order_by(MeatInfo.category, MeatInfo.part_name)
+    result = await db.execute(q)
+    rows = result.scalars().all()
+    return [
+        MeatInfoResponse(
+            id=r.id,
+            name=r.part_name,
+            category=r.category,
+            calories=r.calories,
+            protein=float(r.protein) if r.protein else None,
+            fat=float(r.fat) if r.fat else None,
+            storageGuide=r.storage_guide,
+        )
+        for r in rows
+    ]
+
+
+@router.get(
+    "/nutrition",
+    summary="MEAT-05 영양정보 조회 (부위명과 등급 기반)",
+    responses={
+        404: {"description": "영양정보 없음"},
+        503: {"description": "API/DB 조회 실패"},
+    },
+)
+async def meat_nutrition(
+    part_name: str = Query(..., description="부위명 (예: 등심, 갈비)"),
+    grade: str | None = Query(None, description="등급 (예: 1++등급, 1+등급, 1등급, 2등급, 3등급, 일반)"),
+    db: Annotated[AsyncSession, Depends(get_db)] = ...,
+):
+    """
+    부위명과 등급을 기반으로 영양정보를 조회합니다.
+    등급이 지정되면 해당 등급의 영양정보만 반환하고, 없으면 모든 등급의 정보를 반환합니다.
+    """
+    nutrition_data = await nutrition_service.fetch_nutrition(part_name, grade=grade, db=db)
+    return nutrition_data
+
+
+@router.get(
     "/info/{meat_id}",
     response_model=MeatInfoResponse,
     summary="MEAT-02 부위 상세 정보",
@@ -66,7 +117,9 @@ async def meat_info(
     prot = float(row.protein) if row.protein is not None else default_nutrition.get("protein")
     fat_val = float(row.fat) if row.fat is not None else default_nutrition.get("fat")
     return MeatInfoResponse(
+        id=row.id,
         name=row.part_name,
+        category=row.category,
         calories=cal,
         protein=prot,
         fat=fat_val,
@@ -156,16 +209,18 @@ async def meat_info_by_part_name(
 )
 async def meat_traceability_by_number(
     number: Annotated[str, Query(description="이력번호(12자리) 또는 수입 묶음번호(A+숫자)")],
+    source: Annotated[str | None, Query(description="강제 분기: 'import' 또는 'domestic' (수입 묶음번호에서 나온 12자리 이력번호 처리용)")] = None,
 ):
     """
     이력번호 또는 수입육 묶음번호를 입력하면 이력제 정보를 반환합니다.
     - 국내: 12자리 숫자 → MTRACE
     - 수입 이력번호: 그 외 → meatwatch 이력정보(Detail)
     - 수입 묶음번호: A + 19~29자리 → meatwatch 묶음정보(List) 첫 건
+    - source='import': 수입 묶음번호에서 나온 12자리 이력번호를 수입으로 강제 처리
     """
     if not number or not str(number).strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="이력번호 또는 묶음번호가 필요합니다.")
-    data = await traceability_service.fetch_traceability(str(number).strip(), part_name=None)
+    data = await traceability_service.fetch_traceability(str(number).strip(), part_name=None, source=source)
     return TraceabilityInfo(
         historyNo=data.get("historyNo"),
         blNo=data.get("blNo"),

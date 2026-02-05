@@ -10,6 +10,11 @@ class FridgeItemResponse(BaseModel):
     imgUrl: str | None = None
     status: str = "stored"
     expiryDate: date | None = None
+    traceNumber: str | None = None
+    customName: str | None = None  # 더 이상 사용하지 않음 (하위 호환성 유지)
+    desiredConsumptionDate: date | None = None
+    grade: str | None = None  # 이력정보에서 가져온 등급
+    meatInfoId: int  # 현재 선택된 고기 부위 ID
 
 
 class FridgeListResponse(BaseModel):
@@ -41,3 +46,8 @@ class FridgeAlertUpdate(BaseModel):
 
 class FridgeStatusUpdate(BaseModel):
     status: str  # "stored" | "consumed"
+
+
+class FridgeItemUpdate(BaseModel):
+    meatInfoId: int | None = None  # 고기 부위 변경 (customName 대신 사용)
+    desiredConsumptionDate: date | None = None

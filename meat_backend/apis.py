@@ -486,11 +486,24 @@ async def fetch_domestic_traceability(trace_no: str, part_name: str | None = Non
     print(f"DEBUG: REAL API REQUEST Domestic | URL: {url}")
 
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
             resp = await client.get(url)
             print(f"DEBUG: REAL API RESPONSE Domestic | status={resp.status_code} | body_preview={resp.text[:150]}...")
+            
+            # HTML 응답 체크 (리다이렉트 또는 오류 페이지)
+            if resp.status_code >= 300 and resp.status_code < 400:
+                # 리다이렉트 발생 시 HTML 오류로 처리
+                raise HTTPException(status_code=502, detail="국내 이력제 API가 리다이렉트를 반환했습니다. API 키 또는 URL을 확인해주세요.")
+            
             if resp.status_code == 503:
                 raise HTTPException(status_code=503, detail="국내 이력제 서버가 503을 반환했습니다.")
+            
+            # HTML 응답인지 먼저 체크
+            content_type = resp.headers.get("content-type", "").lower()
+            if "text/html" in content_type or resp.text.strip().startswith("<!DOCTYPE") or resp.text.strip().startswith("<html"):
+                logger.warning("국내 이력제 API가 HTML을 반환했습니다. API 키 또는 URL을 확인해주세요.")
+                raise HTTPException(status_code=502, detail="국내 이력제 API가 HTML 오류를 반환했습니다. API 키 또는 URL을 확인해주세요.")
+            
             resp.raise_for_status()
             payload = resp.text
     except HTTPException:

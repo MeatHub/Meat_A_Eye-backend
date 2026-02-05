@@ -41,9 +41,14 @@ class TraceabilityRouter:
     def _route(self, trace_no: str) -> str:
         return "domestic" if _is_domestic_pattern(trace_no) else "import"
 
-    async def fetch(self, trace_no: str, part_name: str | None = None) -> dict:
-        branch = self._route(trace_no)
-        print(f"[TRACEABILITY] 분기: {'국내(Domestic)' if branch == 'domestic' else '수입(Import)'} | trace_no={trace_no}")
+    async def fetch(self, trace_no: str, part_name: str | None = None, source: str | None = None) -> dict:
+        # source 파라미터로 강제 분기 (수입 묶음번호에서 나온 12자리 이력번호 처리)
+        if source == "import":
+            branch = "import"
+            print(f"[TRACEABILITY] 강제 분기: 수입(Import) | trace_no={trace_no} | source={source}")
+        else:
+            branch = self._route(trace_no)
+            print(f"[TRACEABILITY] 분기: {'국내(Domestic)' if branch == 'domestic' else '수입(Import)'} | trace_no={trace_no}")
 
         if branch == "domestic":
             try:
@@ -66,7 +71,7 @@ class TraceabilityService:
     def __init__(self):
         self._router = TraceabilityRouter()
 
-    async def fetch_traceability(self, trace_no: str, part_name: str | None = None) -> dict:
+    async def fetch_traceability(self, trace_no: str, part_name: str | None = None, source: str | None = None) -> dict:
         if not trace_no or not str(trace_no).strip():
             raise HTTPException(status_code=400, detail="이력번호가 필요합니다.")
-        return await self._router.fetch(str(trace_no).strip(), part_name)
+        return await self._router.fetch(str(trace_no).strip(), part_name, source)

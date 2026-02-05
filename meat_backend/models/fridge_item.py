@@ -10,7 +10,7 @@ class FridgeItem(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     member_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("members.id", ondelete="CASCADE"), nullable=False)
-    meat_info_id: Mapped[int] = mapped_column(Integer, ForeignKey("meat_info.id"), nullable=False)
+    meat_info_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("meat_info.id"), nullable=True)
     storage_date: Mapped[date] = mapped_column(Date, nullable=False)
     expiry_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="stored")
@@ -20,6 +20,9 @@ class FridgeItem(Base):
     trace_number: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="이력번호")
     origin: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="원산지")
     company_name: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="업체명")
+    # 사용자 커스터마이징
+    custom_name: Mapped[str | None] = mapped_column(String(100), nullable=True, comment="사용자 지정 고기 이름")
+    desired_consumption_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="희망 섭취기간")
 
     member = relationship("Member", back_populates="fridge_items")
     meat_info = relationship("MeatInfo", back_populates="fridge_items")

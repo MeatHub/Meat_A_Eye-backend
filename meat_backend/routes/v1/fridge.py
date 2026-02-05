@@ -18,6 +18,7 @@ from ...schemas.fridge import (
     FridgeItemFromTraceabilityAdd,
     FridgeAlertUpdate,
     FridgeStatusUpdate,
+    FridgeItemUpdate,
 )
 from ...models.web_notification import WebNotification
 from ...middleware.jwt import get_current_user, get_current_user_optional
@@ -65,7 +66,13 @@ async def fridge_list(
     rows = result.scalars().all()
     items = []
     for r in rows:
-        name = r.meat_info.part_name if r.meat_info else "알 수 없음"
+        # meat_info_id가 None이면 "부위 선택" 상태
+        if r.meat_info_id is None or not r.meat_info:
+            name = "부위 선택"
+            meat_info_id = 0
+        else:
+            name = r.meat_info.part_name
+            meat_info_id = r.meat_info_id
         d = _d_day(r.expiry_date)
         items.append(
             FridgeItemResponse(
@@ -75,6 +82,11 @@ async def fridge_list(
                 imgUrl=None,
                 status=r.status,
                 expiryDate=r.expiry_date,
+                traceNumber=r.trace_number,
+                customName=None,  # 더 이상 사용하지 않음
+                desiredConsumptionDate=r.desired_consumption_date,
+                grade=r.grade,  # 이력정보에서 가져온 등급
+                meatInfoId=meat_info_id,  # NULL이면 0으로 변환
             )
         )
     # 유통기한 임박(D-Day 작은 것) 우선 → 이미 expiry_date asc로 정렬됨
@@ -151,29 +163,30 @@ async def fridge_add_from_traceability(
     if body.meatId:
         meat = await db.get(MeatInfo, body.meatId)
     if not meat and body.partName:
-        # 품목명에서 돼지/소 구분 후 해당 category 첫 건 사용
-        p = (body.partName or "").lower()
-        if "돼지" in p or "pork" in p:
-            r = await db.execute(select(MeatInfo).where(MeatInfo.category == "pork").limit(1))
-            meat = r.scalar_one_or_none()
-        if not meat and ("소" in p or "beef" in p or "쇠" in p):
-            r = await db.execute(select(MeatInfo).where(MeatInfo.category == "beef").limit(1))
-            meat = r.scalar_one_or_none()
-        if not meat:
-            r = await db.execute(select(MeatInfo).limit(1))
-            meat = r.scalar_one_or_none()
-    if not meat:
-        r = await db.execute(select(MeatInfo).limit(1))
-        meat = r.scalar_one_or_none()
-    if not meat:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="meat_info가 없습니다. 관리자에게 문의하세요.",
+        # 1. part_name으로 정확히 매칭 시도
+        p = (body.partName or "").strip()
+        result = await db.execute(
+            select(MeatInfo).where(MeatInfo.part_name == p).limit(1)
         )
+        meat = result.scalar_one_or_none()
+        
+        # 2. 정확히 매칭되지 않으면 부분 매칭 시도
+        if not meat:
+            result = await db.execute(
+                select(MeatInfo)
+                .where(MeatInfo.part_name.like(f"%{p}%"))
+                .order_by(MeatInfo.id)
+                .limit(1)
+            )
+            meat = result.scalar_one_or_none()
+    
+    # meat_info를 찾지 못해도 냉장고 아이템 추가 (meat_info_id는 None으로 설정)
+    # 프론트엔드에서 meatInfoId가 0이면 "부위 선택" 표시
+    meat_info_id = meat.id if meat else None
     slaughter_date = body.slaughterDate
     item = FridgeItem(
         member_id=member.id,
-        meat_info_id=meat.id,
+        meat_info_id=meat_info_id,  # None 허용
         storage_date=body.storageDate,
         expiry_date=body.expiryDate,
         status="stored",
@@ -185,13 +198,16 @@ async def fridge_add_from_traceability(
     db.add(item)
     await db.flush()
     await db.refresh(item)
+    
+    # 알림 생성 (meat_info가 없으면 "고기"로 표시)
+    item_name = meat.part_name if meat else "고기"
     alert_time = datetime.combine(body.expiryDate, datetime.min.time().replace(hour=9))
     notif = WebNotification(
         member_id=member.id,
         fridge_item_id=item.id,
         notification_type="expiry_alert",
-        title=f"{meat.part_name} 유통기한 임박",
-        body=f"{meat.part_name}의 유통기한이 {body.expiryDate}입니다.",
+        title=f"{item_name} 유통기한 임박",
+        body=f"{item_name}의 유통기한이 {body.expiryDate}입니다.",
         scheduled_at=alert_time,
         status="pending",
     )
@@ -237,6 +253,65 @@ async def fridge_status_update(
     item.status = body.status
     await db.flush()
     return {"success": True, "status": item.status}
+
+
+@router.patch(
+    "/{item_id}",
+    summary="FRIDGE-04 냉장고 아이템 수정 (고기 부위, 희망 섭취기간)",
+    responses={
+        404: {"description": "아이템 없음"},
+        403: {"description": "접근 권한 없음"},
+        422: {"description": "meat_info 없음"},
+    },
+)
+async def fridge_update(
+    item_id: int,
+    body: FridgeItemUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    member: Annotated[Member, Depends(get_current_user)],
+):
+    item = await db.get(FridgeItem, item_id)
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="아이템 없음")
+    if item.member_id != member.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="접근 권한 없음")
+    
+    # 고기 부위 변경
+    if body.meatInfoId is not None:
+        if body.meatInfoId == 0:
+            # 0이면 부위 미선택 (NULL로 설정)
+            item.meat_info_id = None
+        else:
+            meat = await db.get(MeatInfo, body.meatInfoId)
+            if not meat:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="meat_info 없음"
+                )
+            item.meat_info_id = body.meatInfoId
+    
+    # 희망 섭취기간 변경
+    if body.desiredConsumptionDate is not None:
+        item.desired_consumption_date = body.desiredConsumptionDate
+    
+    await db.flush()
+    await db.refresh(item)
+    await db.refresh(item, ["meat_info"])
+    
+    # 업데이트된 정보 반환
+    if item.meat_info_id is None or not item.meat_info:
+        name = "부위 선택"
+        meat_info_id = 0
+    else:
+        name = item.meat_info.part_name
+        meat_info_id = item.meat_info_id
+    return {
+        "success": True,
+        "id": item.id,
+        "meatInfoId": meat_info_id,
+        "desiredConsumptionDate": item.desired_consumption_date,
+        "name": name,
+    }
 
 
 @router.delete(

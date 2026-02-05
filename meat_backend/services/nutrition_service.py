@@ -388,9 +388,15 @@ async def _fetch_from_db(part_name: str, db: AsyncSession) -> dict[str, Any]:
 class NutritionService:
     """영양정보 조회: 외부 API 우선, 실패 시 DB fallback. 등급별 + 세부부위별 그룹화."""
 
-    async def fetch_nutrition(self, part_name: str, db: AsyncSession | None = None) -> dict[str, Any]:
+    async def fetch_nutrition(
+        self, 
+        part_name: str, 
+        grade: str | None = None,
+        db: AsyncSession | None = None
+    ) -> dict[str, Any]:
         """
-        부위명으로 영양정보 조회 (외부 API 우선 → 실패 시 DB).
+        부위명과 등급으로 영양정보 조회 (외부 API 우선 → 실패 시 DB).
+        grade가 지정되면 해당 등급의 영양정보만 반환, 없으면 모든 등급 반환.
         반환 형식:
         {
             "by_grade": [
@@ -410,10 +416,20 @@ class NutritionService:
         """
         # 1. 외부 API 시도 (API 키가 있으면)
         print(f"=" * 60)
-        print(f"🔍 [영양정보] 조회 시작: {part_name}")
+        print(f"🔍 [영양정보] 조회 시작: {part_name}" + (f" (등급: {grade})" if grade else ""))
         print(f"=" * 60)
         api_result = await _fetch_from_api(part_name)
         if api_result:
+            # 등급 필터링
+            if grade:
+                filtered_grades = [g for g in api_result.get("by_grade", []) if g.get("grade") == grade]
+                if filtered_grades:
+                    api_result["by_grade"] = filtered_grades
+                    api_result["default"] = filtered_grades[0].get("nutrition", api_result["default"])
+                else:
+                    # 해당 등급이 없으면 가장 높은 등급 사용
+                    print(f"⚠️ [영양정보] 등급 '{grade}' 없음, 기본값 사용")
+            
             subpart_count = sum(len(g.get("by_subpart", [])) for g in api_result.get("by_grade", []))
             print(f"✅ [영양정보] API 성공: {part_name} (등급 {len(api_result['by_grade'])}개, 세부부위 {subpart_count}개)")
             print(f"=" * 60)
@@ -429,6 +445,16 @@ class NutritionService:
         
         print(f"⚠️ [영양정보] API 실패 → DB fallback: {part_name}")
         db_result = await _fetch_from_db(part_name, db)
+        
+        # 등급 필터링
+        if grade:
+            filtered_grades = [g for g in db_result.get("by_grade", []) if g.get("grade") == grade]
+            if filtered_grades:
+                db_result["by_grade"] = filtered_grades
+                db_result["default"] = filtered_grades[0].get("nutrition", db_result["default"])
+            else:
+                print(f"⚠️ [영양정보] 등급 '{grade}' 없음, 기본값 사용")
+        
         subpart_count = sum(len(g.get("by_subpart", [])) for g in db_result.get("by_grade", []))
         print(f"✅ [영양정보] DB 성공: {part_name} (등급 {len(db_result['by_grade'])}개, 세부부위 {subpart_count}개)")
         print(f"=" * 60)

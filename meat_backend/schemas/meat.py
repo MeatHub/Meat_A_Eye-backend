@@ -9,7 +9,9 @@ class MeatPriceResponse(BaseModel):
 
 
 class MeatInfoResponse(BaseModel):
+    id: int | None = None  # 목록 조회 시 필요
     name: str
+    category: str | None = None  # beef/pork
     calories: int | None
     protein: float | None
     fat: float | None

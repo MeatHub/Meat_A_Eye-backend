@@ -9,7 +9,7 @@ from .auth import (
     WebPushSubscribeResponse,
 )
 from .meat import MeatPriceResponse, MeatInfoResponse
-from .fridge import FridgeListResponse, FridgeItemAdd, FridgeItemResponse, FridgeAlertUpdate
+from .fridge import FridgeListResponse, FridgeItemAdd, FridgeItemResponse, FridgeAlertUpdate, FridgeItemUpdate
 from .ai import AIMode, AIAnalyzeResponse
 from .stats import ConsumptionStatsResponse, ConsumptionStatsItem
 
@@ -28,6 +28,7 @@ __all__ = [
     "FridgeItemAdd",
     "FridgeItemResponse",
     "FridgeAlertUpdate",
+    "FridgeItemUpdate",
     "AIMode",
     "AIAnalyzeResponse",
     "ConsumptionStatsResponse",

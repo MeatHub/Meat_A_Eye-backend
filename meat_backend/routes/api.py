@@ -255,24 +255,31 @@ async def api_analyze(
                     source=data.get("source", "api"),
                     server_maintenance=data.get("server_maintenance", False),
                 )
+        except HTTPException as e:
+            # HTML 응답 등으로 인한 HTTPException은 조용히 실패 (OCR은 성공했으므로 계속 진행)
+            print("=" * 50)
+            print(f"⚠️ [WARNING] Endpoint: {request.url}")
+            print(f"⚠️ [DETAILS]: 이력제 API HTTPException (이력번호: {history_no}) - {e.detail}")
+            print("=" * 50)
+            logger.warning("이력제 조회 실패 (계속 진행): %s", e.detail)
         except httpx.TimeoutException as e:
             print("=" * 50)
-            print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
-            print(f"🚨 [DETAILS]: 이력제 API Timeout (이력번호: {history_no}) - {str(e)}")
+            print(f"⚠️ [WARNING] Endpoint: {request.url}")
+            print(f"⚠️ [DETAILS]: 이력제 API Timeout (이력번호: {history_no}) - {str(e)}")
             print("=" * 50)
-            logger.exception("이력제 API Timeout: %s", e)
+            logger.warning("이력제 API Timeout (계속 진행): %s", e)
         except httpx.HTTPStatusError as e:
             print("=" * 50)
-            print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
-            print(f"🚨 [DETAILS]: 이력제 API HTTP {e.response.status_code} (이력번호: {history_no}) - {str(e)}")
+            print(f"⚠️ [WARNING] Endpoint: {request.url}")
+            print(f"⚠️ [DETAILS]: 이력제 API HTTP {e.response.status_code} (이력번호: {history_no}) - {str(e)}")
             print("=" * 50)
-            logger.exception("이력제 API HTTP Error: %s", e)
+            logger.warning("이력제 API HTTP Error (계속 진행): %s", e)
         except Exception as e:
             print("=" * 50)
-            print(f"🚨 [REAL ERROR] Endpoint: {request.url}")
-            print(f"🚨 [DETAILS]: 이력제 API {type(e).__name__} (이력번호: {history_no}) - {str(e)}")
+            print(f"⚠️ [WARNING] Endpoint: {request.url}")
+            print(f"⚠️ [DETAILS]: 이력제 API {type(e).__name__} (이력번호: {history_no}) - {str(e)}")
             print("=" * 50)
-            logger.exception("이력제 조회 실패: %s", e)
+            logger.warning("이력제 조회 실패 (계속 진행): %s", e)
         return None
 
     nutrition_info, price_info, traceability_info = await asyncio.gather(
@@ -373,76 +380,87 @@ async def api_analyze(
                 )
                 meat = meat_result.scalar_one_or_none()
             if not meat and traceability_info and getattr(traceability_info, "partName", None):
-                # OCR만 이력번호만 반환한 경우: 이력 품목명(돼지/소)으로 meat_info 결정
-                p = (traceability_info.partName or "").lower()
-                if "돼지" in p or "pork" in p:
-                    r = await db.execute(select(MeatInfo).where(MeatInfo.category == "pork").limit(1))
-                    meat = r.scalar_one_or_none()
-                if not meat and ("소" in p or "beef" in p or "쇠" in p):
-                    r = await db.execute(select(MeatInfo).where(MeatInfo.category == "beef").limit(1))
-                    meat = r.scalar_one_or_none()
+                # OCR만 이력번호만 반환한 경우: 이력 품목명으로 meat_info 결정
+                p = (traceability_info.partName or "").strip()
+                
+                # 1. part_name으로 정확히 매칭 시도
+                result = await db.execute(
+                    select(MeatInfo).where(MeatInfo.part_name == p).limit(1)
+                )
+                meat = result.scalar_one_or_none()
+                
+                # 2. 정확히 매칭되지 않으면 부분 매칭 시도
                 if not meat:
-                    r = await db.execute(select(MeatInfo).limit(1))
-                    meat = r.scalar_one_or_none()
-            if meat:
-                recognition_date_only = recognition_date.date()
-                expiry_date = recognition_date_only + timedelta(days=3)
-                if traceability_info and getattr(traceability_info, "recommendedExpiry", None):
+                    result = await db.execute(
+                        select(MeatInfo)
+                        .where(MeatInfo.part_name.like(f"%{p}%"))
+                        .order_by(MeatInfo.id)
+                        .limit(1)
+                    )
+                    meat = result.scalar_one_or_none()
+            
+            # meat_info를 찾지 못해도 냉장고 아이템 추가 (meat_info_id는 None으로 설정)
+            # 프론트엔드에서 meatInfoId가 0이면 "부위 선택" 표시
+            meat_info_id = meat.id if meat else None
+            recognition_date_only = recognition_date.date()
+            expiry_date = recognition_date_only + timedelta(days=3)
+            if traceability_info and getattr(traceability_info, "recommendedExpiry", None):
+                try:
+                    expiry_date = datetime.strptime(
+                        str(traceability_info.recommendedExpiry)[:10], "%Y-%m-%d"
+                    ).date()
+                except (ValueError, TypeError):
+                    pass
+
+            slaughter_date = None
+            grade = None
+            origin = None
+            company_name = None
+            if traceability_info:
+                slaughter_date_str = getattr(traceability_info, "slaughterDate", None) or getattr(traceability_info, "slaughterDateFrom", None)
+                if slaughter_date_str:
                     try:
-                        expiry_date = datetime.strptime(
-                            str(traceability_info.recommendedExpiry)[:10], "%Y-%m-%d"
-                        ).date()
+                        slaughter_date = datetime.strptime(slaughter_date_str, "%Y-%m-%d").date()
                     except (ValueError, TypeError):
-                        pass
-
-                slaughter_date = None
-                grade = None
-                origin = None
-                company_name = None
-                if traceability_info:
-                    slaughter_date_str = getattr(traceability_info, "slaughterDate", None) or getattr(traceability_info, "slaughterDateFrom", None)
-                    if slaughter_date_str:
                         try:
-                            slaughter_date = datetime.strptime(slaughter_date_str, "%Y-%m-%d").date()
+                            slaughter_date = datetime.strptime(str(slaughter_date_str)[:10], "%Y-%m-%d").date()
                         except (ValueError, TypeError):
-                            try:
-                                slaughter_date = datetime.strptime(str(slaughter_date_str)[:10], "%Y-%m-%d").date()
-                            except (ValueError, TypeError):
-                                logger.warning("도축일자 파싱 실패: %s", slaughter_date_str)
-                    grade = traceability_info.grade
-                    origin = traceability_info.origin
-                    company_name = traceability_info.companyName
+                            logger.warning("도축일자 파싱 실패: %s", slaughter_date_str)
+                grade = traceability_info.grade
+                origin = traceability_info.origin
+                company_name = traceability_info.companyName
 
-                fridge_item = FridgeItem(
-                    member_id=member.id,
-                    meat_info_id=meat.id,
-                    storage_date=recognition_date_only,
-                    expiry_date=expiry_date,
-                    status="stored",
-                    slaughter_date=slaughter_date,
-                    grade=grade,
-                    trace_number=history_no,
-                    origin=origin,
-                    company_name=company_name,
-                )
-                db.add(fridge_item)
-                await db.flush()
-                await db.refresh(fridge_item)
-                fridge_item_id = fridge_item.id
+            fridge_item = FridgeItem(
+                member_id=member.id,
+                meat_info_id=meat_info_id,  # None 허용
+                storage_date=recognition_date_only,
+                expiry_date=expiry_date,
+                status="stored",
+                slaughter_date=slaughter_date,
+                grade=grade,
+                trace_number=history_no,
+                origin=origin,
+                company_name=company_name,
+            )
+            db.add(fridge_item)
+            await db.flush()
+            await db.refresh(fridge_item)
+            fridge_item_id = fridge_item.id
 
-                # 유통기한 알림 예약
-                alert_time = datetime.combine(expiry_date, datetime.min.time().replace(hour=9))
-                notification = WebNotification(
-                    member_id=member.id,
-                    fridge_item_id=fridge_item_id,
-                    notification_type="expiry_alert",
-                    title=f"{meat.part_name} 유통기한 임박",
-                    body=f"{meat.part_name}의 유통기한이 {expiry_date}입니다.",
-                    scheduled_at=alert_time,
-                    status="pending",
-                )
-                db.add(notification)
-                await db.flush()
+            # 유통기한 알림 예약 (meat_info가 없으면 "고기"로 표시)
+            item_name = meat.part_name if meat else "고기"
+            alert_time = datetime.combine(expiry_date, datetime.min.time().replace(hour=9))
+            notification = WebNotification(
+                member_id=member.id,
+                fridge_item_id=fridge_item_id,
+                notification_type="expiry_alert",
+                title=f"{item_name} 유통기한 임박",
+                body=f"{item_name}의 유통기한이 {expiry_date}입니다.",
+                scheduled_at=alert_time,
+                status="pending",
+            )
+            db.add(notification)
+            await db.flush()
 
     return AIAnalyzeResponse(
         partName=part_name,
