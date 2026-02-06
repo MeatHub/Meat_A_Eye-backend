@@ -87,6 +87,24 @@ GRADE_CODE_MAP: dict[str, str] = {
     "82": "호주산",
 }
 
+# monthlyPriceTrendList API용 품목코드 (productno). itemcode+kindcode 6자리 또는 KAMIS 품목코드표 기준.
+PART_PRODUCTNO: dict[str, str] = {
+    "Beef_Tenderloin": "430121",
+    "Beef_Ribeye": "430122",
+    "Beef_Sirloin": "430123",
+    "Beef_Chuck": "430124",
+    "Beef_Shoulder": "430125",
+    "Beef_Round": "430127",
+    "Beef_BottomRound": "430136",
+    "Beef_Brisket": "430140",
+    "Beef_Shank": "430129",
+    "Beef_Rib": "430150",
+    "Pork_Shoulder": "430425",
+    "Pork_Belly": "430427",
+    "Pork_Rib": "430428",
+    "Pork_Loin": "430468",
+}
+
 PART_TO_CODES: dict[str, dict[str, Any]] = {
     # 소(국내) - itemcode 4301
     "Beef_Tenderloin": {
@@ -562,6 +580,298 @@ async def fetch_kamis_price(
         "selectedGrade": primary.get("grade", "일반"),
     }
 
+
+async def fetch_kamis_price_period(
+    part_name: str,
+    region: str = "전국",
+    grade_code: str = "00",
+    months: int | None = None,
+    weeks: int | None = 6,
+) -> list[dict[str, Any]]:
+    """
+    KAMIS 기간별 시세 조회 (periodProductList: p_startday, p_endday, p_itemcode, p_kindcode 등).
+    주별 그래프용: weeks 지정 시 최근 N주 일별 데이터 반환. months 지정 시 기존 월별 구간.
+    Returns: [ {"date": "2025-01-15", "price": 12000}, ... ]
+    """
+    key = (settings.kamis_api_key or "").strip()
+    cert_id = (settings.kamis_cert_id or "pak101044").strip()
+    if not key:
+        raise HTTPException(status_code=503, detail="KAMIS API 키가 설정되지 않았습니다.")
+
+    base = (settings.kamis_api_url or "https://www.kamis.or.kr/service/price/xml.do").strip()
+    today = date.today()
+    end_day = today.strftime("%Y-%m-%d")
+    if weeks is not None and weeks > 0:
+        days = min(weeks * 7, 365)
+    else:
+        days = min((months or 6) * 31, 365)
+    start_day = (today - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    codes = _get_codes(part_name)
+    if (part_name not in PART_TO_CODES and codes.get("food_nm") == part_name) or not codes.get("itemcode"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"{part_name} 기간 데이터를 알 수 없습니다.",
+        )
+
+    county_code = "" if region == "전국" else region
+    product_rank_code = "" if grade_code == "00" else grade_code
+
+    params = {
+        "action": "periodProductList",
+        "p_cert_key": key,
+        "p_cert_id": cert_id,
+        "p_returntype": "json",
+        "p_startday": start_day,
+        "p_endday": end_day,
+        "p_itemcode": codes.get("itemcode", ""),
+        "p_kindcode": codes.get("kindcode", ""),
+        "p_productrankcode": product_rank_code,
+        "p_countycode": county_code,
+        "p_convert_kg_yn": "N",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            req = client.build_request("GET", base, params=params)
+            resp = await client.send(req)
+            resp.raise_for_status()
+            payload = resp.text
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=503, detail=f"KAMIS API 연결 실패: HTTP {exc.response.status_code}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"KAMIS API 연결 실패: {exc}") from exc
+
+    parsed = _parse_response(payload, "KAMIS")
+
+    def _collect_items(node: Any) -> list:
+        collected: list = []
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "item":
+                    collected.extend(_ensure_list(value))
+                else:
+                    collected.extend(_collect_items(value))
+        elif isinstance(node, list):
+            for child in node:
+                collected.extend(_collect_items(child))
+        return collected
+
+    items: list[dict[str, Any]] = []
+    if "document" in parsed:
+        document = parsed.get("document", {}) or {}
+        data = document.get("data", {})
+        if isinstance(data, dict) and str(data.get("error_code", "000")) in ("0", "000"):
+            items = _ensure_list(data.get("item"))
+        if not items:
+            items = _collect_items(document)
+    if not items and "data" in parsed:
+        data = parsed.get("data", {})
+        if isinstance(data, dict) and str(data.get("error_code", "000")) in ("0", "000"):
+            items = _ensure_list(data.get("item"))
+    if not items and isinstance(parsed, dict) and "item" in parsed:
+        items = _ensure_list(parsed.get("item"))
+
+    target_name = codes.get("food_nm", "")
+    result: list[dict[str, Any]] = []
+    seen_dates: set[str] = set()
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_price = (
+            item.get("price")
+            or item.get("dpr1")
+            or item.get("dpr0")
+            or item.get("avgPrc")
+            or item.get("value")
+            or item.get("priceValue")
+        )
+        try:
+            price_value = int(float(str(raw_price).replace(",", "")))
+        except (TypeError, ValueError):
+            price_value = 0
+        if price_value <= 0:
+            continue
+        yyyy = str(item.get("yyyy", "")).strip()
+        regday = (
+            item.get("lastest_day")
+            or item.get("regday")
+            or (yyyy + "-" + str(item.get("mm", "")) + "-" + str(item.get("dd", "")) if yyyy else "")
+        )
+        if not regday or not isinstance(regday, str):
+            continue
+        regday = str(regday).strip()
+        # KAMIS periodProductList: yyyy="2025", regday="02/06" (MM/DD) → YYYY-MM-DD
+        if yyyy and ("/" in regday or "-" in regday) and len(regday) <= 5:
+            regday = f"{yyyy}-{regday.replace('/', '-')}"
+        # 정규화: YYYY-MM-DD
+        elif "/" in regday:
+            regday = regday.replace("/", "-")
+        if len(regday) == 8 and regday.isdigit():
+            regday = f"{regday[:4]}-{regday[4:6]}-{regday[6:8]}"
+        if len(regday) < 10 or regday in seen_dates:
+            continue
+        seen_dates.add(regday)
+        result.append({"date": regday, "price": price_value})
+
+    result.sort(key=lambda x: x["date"])
+    return result
+
+
+async def fetch_kamis_monthly_trend(
+    part_name: str,
+    regday: str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    KAMIS 월평균 가격추이 API (monthlyPriceTrendList).
+    요청: action=monthlyPriceTrendList, p_productno(필수), p_regday(선택).
+    Returns: [ {"month": "2025-09", "price": 12000}, ... ]
+    """
+    key = (settings.kamis_api_key or "").strip()
+    cert_id = (settings.kamis_cert_id or "pak101044").strip()
+    if not key:
+        raise HTTPException(status_code=503, detail="KAMIS API 키가 설정되지 않았습니다.")
+
+    productno = PART_PRODUCTNO.get(part_name)
+    if not productno:
+        codes = _get_codes(part_name)
+        if codes.get("itemcode") and codes.get("kindcode"):
+            productno = (codes.get("itemcode", "") or "") + (codes.get("kindcode", "") or "")
+        if not productno:
+            raise HTTPException(
+                status_code=404,
+                detail=f"{part_name} 월별 시세 품목코드를 알 수 없습니다.",
+            )
+
+    base = (settings.kamis_api_url or "https://www.kamis.or.kr/service/price/xml.do").strip()
+    params: dict[str, str] = {
+        "action": "monthlyPriceTrendList",
+        "p_cert_key": key,
+        "p_cert_id": cert_id,
+        "p_returntype": "json",
+        "p_productno": productno,
+    }
+    if regday:
+        params["p_regday"] = regday
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            req = client.build_request("GET", base, params=params)
+            resp = await client.send(req)
+            resp.raise_for_status()
+            payload = resp.text
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"KAMIS 월별시세 API 연결 실패: HTTP {exc.response.status_code}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"KAMIS 월별시세 API 연결 실패: {exc}") from exc
+
+    parsed = _parse_response(payload, "KAMIS monthlyPriceTrendList")
+
+    def _collect_items(node: Any) -> list:
+        collected: list = []
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "item":
+                    collected.extend(_ensure_list(value))
+                else:
+                    collected.extend(_collect_items(value))
+        elif isinstance(node, list):
+            for child in node:
+                collected.extend(_collect_items(child))
+        return collected
+
+    items: list[dict[str, Any]] = []
+    if "document" in parsed:
+        document = parsed.get("document", {}) or {}
+        data = document.get("data", {})
+        if isinstance(data, dict) and str(data.get("error_code", "000")) in ("0", "000"):
+            items = _ensure_list(data.get("item"))
+        if not items:
+            items = _collect_items(document)
+    if not items and "data" in parsed:
+        data = parsed.get("data", {})
+        if isinstance(data, dict):
+            if str(data.get("error_code", "000")) not in ("0", "000"):
+                error_msg = data.get("error_msg") or data.get("message") or "알 수 없는 오류"
+                raise HTTPException(status_code=502, detail=f"KAMIS 월별시세: {error_msg}")
+            items = _ensure_list(data.get("item"))
+    if not items and isinstance(parsed, dict) and "item" in parsed:
+        items = _ensure_list(parsed.get("item"))
+
+    result: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        yyyymm = item.get("yyyymm") or item.get("month") or item.get("regday", "")
+        if not yyyymm:
+            continue
+        raw_price = (
+            item.get("price")
+            or item.get("avgPrc")
+            or item.get("dpr1")
+            or item.get("value")
+        )
+        try:
+            price_value = int(float(str(raw_price).replace(",", "")))
+        except (TypeError, ValueError):
+            price_value = 0
+        if price_value <= 0:
+            continue
+        month_str = str(yyyymm).replace("/", "-")
+        if len(month_str) == 6 and month_str.isdigit():
+            month_str = f"{month_str[:4]}-{month_str[4:6]}"
+        result.append({"month": month_str, "price": price_value})
+
+    result.sort(key=lambda x: x["month"])
+    return result
+
+
+async def check_kamis_monthly_trend_connection() -> dict[str, Any]:
+    """
+    KAMIS monthlyPriceTrendList API 연결 확인.
+    Returns: { "connected": True, "message": "..." } or raises HTTPException.
+    """
+    key = (settings.kamis_api_key or "").strip()
+    cert_id = (settings.kamis_cert_id or "pak101044").strip()
+    if not key:
+        return {"connected": False, "message": "KAMIS API 키가 설정되지 않았습니다."}
+
+    base = (settings.kamis_api_url or "https://www.kamis.or.kr/service/price/xml.do").strip()
+    params = {
+        "action": "monthlyPriceTrendList",
+        "p_cert_key": key,
+        "p_cert_id": cert_id,
+        "p_returntype": "json",
+        "p_productno": "430122",  # 소/등심 품목코드로 연결 테스트
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            req = client.build_request("GET", base, params=params)
+            resp = await client.send(req)
+            resp.raise_for_status()
+            payload = resp.text
+    except Exception as e:
+        return {"connected": False, "message": f"KAMIS 월별시세 API 연결 실패: {e}"}
+
+    try:
+        parsed = _parse_response(payload, "KAMIS monthlyPriceTrendList")
+        data = parsed.get("data") or (parsed.get("document") or {}).get("data") or {}
+        if isinstance(data, dict) and str(data.get("error_code", "000")) not in ("0", "000"):
+            msg = data.get("error_msg") or data.get("message") or "API 오류"
+            return {"connected": False, "message": msg}
+        items = _ensure_list(data.get("item")) or _ensure_list(parsed.get("item"))
+        if items:
+            return {"connected": True, "message": "KAMIS 월별 가격추이 API 연결됨"}
+        return {"connected": True, "message": "KAMIS 월별 가격추이 API 응답 정상 (데이터 없음)"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"connected": False, "message": f"응답 파싱 실패: {e}"}
 
 
 # 영양정보 (DB meat_nutrition 사용 — NutritionService 참고)

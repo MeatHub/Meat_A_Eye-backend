@@ -1,5 +1,6 @@
 """대시보드 API - 실시간 인기 부위, 통계 등."""
 import logging
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import List
 
@@ -8,6 +9,7 @@ from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
+from ..apis import fetch_kamis_price_period, check_kamis_monthly_trend_connection
 from ..config.database import get_db
 from ..models.recognition_log import RecognitionLog
 from ..services.price_service import PriceService
@@ -168,6 +170,145 @@ async def get_dashboard_prices(
             logger.warning("돼지 가격 조회 실패 (%s): %s", name or code, e, exc_info=True)
 
     return DashboardPricesResponse(beef=beef_items, pork=pork_items)
+
+
+class PriceHistoryPoint(BaseModel):
+    week: str  # "01.06~01.12" (주 구간 라벨)
+    partName: str
+    price: int
+
+
+class PriceHistoryResponse(BaseModel):
+    beef: List[PriceHistoryPoint]
+    pork: List[PriceHistoryPoint]
+
+
+def _aggregate_daily_by_week(daily: list[dict], part_name: str) -> list[dict]:
+    """
+    일별 리스트를 1주일 간격으로 집계. 최근 날(오늘) 기준 역순으로 주 구간 묶음.
+    Returns: [ {"week": "01.06~01.12", "partName": "...", "price": int}, ... ]
+    """
+    if not daily:
+        return []
+    # (week_label, week_end_date) -> list of prices (주 끝 날짜로 정렬)
+    by_week: dict[tuple[str, datetime], list[int]] = defaultdict(list)
+    for point in daily:
+        d = point.get("date", "")
+        if len(d) < 10:
+            continue
+        try:
+            dt_obj = datetime.strptime(d[:10], "%Y-%m-%d").date()
+            week_start = dt_obj - timedelta(days=dt_obj.weekday())
+            week_end = week_start + timedelta(days=6)
+            week_label = f"{week_start.month:02d}.{week_start.day:02d}~{week_end.month:02d}.{week_end.day:02d}"
+            week_end_dt = datetime.combine(week_end, datetime.min.time())
+            by_week[(week_label, week_end_dt)].append(point.get("price", 0))
+        except (ValueError, TypeError):
+            continue
+    result = []
+    for (week_label, _), prices in sorted(by_week.items(), key=lambda x: x[0][1]):
+        if prices:
+            result.append({
+                "week": week_label,
+                "partName": part_name,
+                "price": int(sum(prices) / len(prices)),
+            })
+    return result
+
+
+@router.get(
+    "/prices/history/check",
+    summary="시세 API 연결 확인",
+)
+async def get_price_history_connection_check():
+    """
+    KAMIS 시세 API 연결 여부 확인.
+    Returns: { "connected": true/false, "message": "..." }
+    """
+    return await check_kamis_monthly_trend_connection()
+
+
+@router.get(
+    "/prices/history",
+    response_model=PriceHistoryResponse,
+    summary="주별 가격 변동 (그래프용, periodProductList)",
+)
+async def get_dashboard_price_history(
+    region: str = "전국",
+    beef_part: str | None = None,
+    pork_part: str | None = None,
+    grade_code: str = "00",
+    weeks: int = 6,
+):
+    """
+    KAMIS 기간별 시세 API(periodProductList, p_startday/p_endday)로 최근 N주 일별 조회 후
+    1주일 간격으로 집계. 실시간 시세와 동일한 지역/등급 필터 적용.
+    """
+    beef_part_map = {
+        "Beef_Tenderloin": "소/안심",
+        "Beef_Ribeye": "소/등심",
+        "Beef_BottomRound": "소/설도",
+        "Beef_Brisket": "소/양지",
+        "Beef_Rib": "소/갈비",
+    }
+    pork_part_map = {
+        "Pork_Shoulder": "돼지/앞다리",
+        "Pork_Belly": "돼지/삼겹살",
+        "Pork_Rib": "돼지/갈비",
+        "Pork_Loin": "돼지/목심",
+    }
+    default_beef = [("Beef_Ribeye", "소/등심")]
+    default_pork = [("Pork_Belly", "돼지/삼겹살")]
+
+    beef_parts = (
+        [(beef_part, beef_part_map[beef_part])]
+        if beef_part and beef_part in beef_part_map
+        else default_beef if pork_part is None else []
+    )
+    pork_parts = (
+        [(pork_part, pork_part_map[pork_part])]
+        if pork_part and pork_part in pork_part_map
+        else default_pork if beef_part is None else []
+    )
+
+    beef_history: List[PriceHistoryPoint] = []
+    pork_history: List[PriceHistoryPoint] = []
+
+    for code, name in beef_parts:
+        try:
+            daily = await fetch_kamis_price_period(
+                part_name=code,
+                region=region,
+                grade_code=grade_code,
+                weeks=weeks,
+            )
+            for pt in _aggregate_daily_by_week(daily, name):
+                beef_history.append(
+                    PriceHistoryPoint(week=pt["week"], partName=pt["partName"], price=pt["price"])
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("소 주별 시세 조회 실패 (%s): %s", name, e)
+
+    for code, name in pork_parts:
+        try:
+            daily = await fetch_kamis_price_period(
+                part_name=code,
+                region=region,
+                grade_code=grade_code,
+                weeks=weeks,
+            )
+            for pt in _aggregate_daily_by_week(daily, name):
+                pork_history.append(
+                    PriceHistoryPoint(week=pt["week"], partName=pt["partName"], price=pt["price"])
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning("돼지 주별 시세 조회 실패 (%s): %s", name, e)
+
+    return PriceHistoryResponse(beef=beef_history, pork=pork_history)
 
 
 @router.get(
