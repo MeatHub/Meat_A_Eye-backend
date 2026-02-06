@@ -55,12 +55,15 @@ class TraceabilityRouter:
                 result = await self._domestic.fetch(trace_no, part_name)
                 return result
             except HTTPException as e:
-                if e.status_code == 503:
-                    print("[TRACEABILITY] Domestic 503 → Import 재시도")
+                # 503 (서비스 불가) 또는 502 (HTML 오류/잘못된 응답)인 경우 Import로 재시도
+                # 수입육도 12자리일 수 있으므로 국산 API 실패 시 수입으로 시도
+                if e.status_code == 503 or e.status_code == 502:
+                    print(f"[TRACEABILITY] Domestic {e.status_code} → Import 재시도 (수입육일 가능성)")
                     try:
                         return await self._import.fetch(trace_no)
                     except HTTPException as e2:
-                        print(f"🚨 [REAL ERROR] {e2}")
+                        print(f"🚨 [REAL ERROR] Import도 실패: {e2}")
+                        # Import도 실패하면 원래 에러를 던짐 (국산일 가능성)
                         raise HTTPException(status_code=503, detail="이력제 API 연결 실패. 잠시 후 다시 시도해 주세요.")
                 print(f"🚨 [REAL ERROR] {e}")
                 raise
