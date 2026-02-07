@@ -77,18 +77,33 @@ async def get_dashboard_prices(
     # 부위 필터 적용 - 부위 코드와 이름 매핑 (테이블 구조에 맞춤)
     # 품목명/품종명 구조: 소/안심, 소/등심, 소/설도, 소/양지, 소/갈비
     #                    돼지/앞다리, 돼지/삼겹살, 돼지/갈비, 돼지/목심
+    #                    수입 소고기/양지, 수입 소고기/갈비 등
     beef_part_map = {
         "Beef_Tenderloin": "소/안심",  # itemcode 4301, kindcode 21
         "Beef_Ribeye": "소/등심",      # itemcode 4301, kindcode 22
         "Beef_BottomRound": "소/설도",  # itemcode 4301, kindcode 36
         "Beef_Brisket": "소/양지",     # itemcode 4301, kindcode 40
         "Beef_Rib": "소/갈비",         # itemcode 4301, kindcode 50
+        # 수입 소고기
+        "Import_Beef_Brisket_US": "수입 소고기/양지(냉장) - 미국산",  # itemcode 4401, kindcode 29, 등급 81
+        "Import_Beef_Brisket_AU": "수입 소고기/양지(냉장) - 호주산",  # itemcode 4401, kindcode 29, 등급 82
+        "Import_Beef_Rib": "수입 소고기/갈비",  # itemcode 4401, kindcode 31
+        "Import_Beef_Rib_US": "수입 소고기/갈비 - 미국산",  # itemcode 4401, kindcode 31, 등급 81
+        "Import_Beef_Rib_AU": "수입 소고기/갈비 - 호주산",  # itemcode 4401, kindcode 31, 등급 82
+        "Import_Beef_Ribeye_US": "수입 소고기/갈비살 - 미국산",  # itemcode 4401, kindcode 37, 등급 81
+        "Import_Beef_Ribeye_AU": "수입 소고기/갈비살 - 호주산",  # itemcode 4401, kindcode 37, 등급 82
+        "Import_Beef_ChuckEye_US": "수입 소고기/척아이롤(냉장) - 미국산",  # itemcode 4401, kindcode 62, 등급 81
+        "Import_Beef_ChuckEye_AU": "수입 소고기/척아이롤(냉장) - 호주산",  # itemcode 4401, kindcode 62, 등급 82
+        "Import_Beef_ChuckEye_Frozen_US": "수입 소고기/척아이롤(냉동) - 미국산",  # itemcode 4401, kindcode 68, 등급 81
+        "Import_Beef_ChuckEye_Frozen_AU": "수입 소고기/척아이롤(냉동) - 호주산",  # itemcode 4401, kindcode 68, 등급 82
     }
     pork_part_map = {
         "Pork_Shoulder": "돼지/앞다리",  # itemcode 4304, kindcode 25
         "Pork_Belly": "돼지/삼겹살",    # itemcode 4304, kindcode 27
         "Pork_Rib": "돼지/갈비",        # itemcode 4304, kindcode 28
         "Pork_Loin": "돼지/목심",       # itemcode 4304, kindcode 68
+        # 수입 돼지고기
+        "Import_Pork_Belly": "수입 돼지고기/삼겹살",  # itemcode 4402, kindcode 27
     }
     
     # 부위 필터링 로직:
@@ -96,9 +111,9 @@ async def get_dashboard_prices(
     # 2. 부위가 None인 경우: 기본 부위 목록 사용 (전체 선택 시)
     # 3. 잘못된 코드인 경우: 빈 리스트 (조회하지 않음)
     
-    # 소고기 부위 결정
+    # 소고기 부위 결정 (국내 소고기 + 수입 소고기)
     if beef_part and beef_part in beef_part_map:
-        # 특정 소고기 부위 선택
+        # 특정 소고기 부위 선택 (국내 또는 수입)
         beef_parts = [(beef_part, beef_part_map[beef_part])]
     elif beef_part is None:
         # beef_part가 None이고 pork_part도 None이면 기본 부위 목록 사용 (전체 선택)
@@ -111,9 +126,9 @@ async def get_dashboard_prices(
         # 잘못된 beef_part 코드인 경우 빈 리스트
         beef_parts = []
     
-    # 돼지고기 부위 결정
+    # 돼지고기 부위 결정 (국내 돼지고기 + 수입 돼지고기)
     if pork_part and pork_part in pork_part_map:
-        # 특정 돼지고기 부위 선택
+        # 특정 돼지고기 부위 선택 (국내 또는 수입)
         pork_parts = [(pork_part, pork_part_map[pork_part])]
     elif pork_part is None:
         # pork_part가 None이고 beef_part도 None이면 기본 부위 목록 사용 (전체 선택)
@@ -216,9 +231,10 @@ def _aggregate_daily_by_week(daily: list[dict], part_name: str) -> list[dict]:
     if not valid_points:
         return []
     
-    # 주별로 그룹화: (주 시작일, 주 끝일) -> [가격들]
+    # 주별로 그룹화: (주 시작일, 주 끝일) -> [(날짜, 가격), ...]
     # 주는 월요일(0)부터 일요일(6)까지
-    by_week: dict[tuple[date, date], list[int]] = defaultdict(list)
+    # 각 주 내에서 가장 최신 날짜의 가격만 사용 (실시간 가격 정보와 동일한 로직)
+    by_week: dict[tuple[date, date], list[tuple[date, int]]] = defaultdict(list)
     
     for dt_obj, price in valid_points:
         # 주 시작일 계산 (월요일 기준)
@@ -229,21 +245,24 @@ def _aggregate_daily_by_week(daily: list[dict], part_name: str) -> list[dict]:
         # 어제 날짜를 넘지 않도록 주 끝일 제한
         week_end = min(week_end, yesterday)
         
-        by_week[(week_start, week_end)].append(price)
+        by_week[(week_start, week_end)].append((dt_obj, price))
     
-    # 주별 평균 가격 계산 및 주 라벨 생성
+    # 주별로 가장 최신 날짜의 가격만 사용 (실시간 가격 정보와 동일한 로직)
     # 주 시작일 기준으로 정렬 (오름차순: 오래된 주가 먼저)
     result = []
-    for (week_start, week_end), prices in sorted(by_week.items(), key=lambda x: (x[0][0], x[0][1])):  # 주 시작일, 끝일 기준 오름차순
-        if prices:
-            avg_price = int(sum(prices) / len(prices))
+    for (week_start, week_end), date_price_list in sorted(by_week.items(), key=lambda x: (x[0][0], x[0][1])):  # 주 시작일, 끝일 기준 오름차순
+        if date_price_list:
+            # 각 주 내에서 가장 최신 날짜의 가격만 사용 (날짜 내림차순 정렬 후 첫 번째)
+            date_price_list.sort(key=lambda x: x[0], reverse=True)  # 날짜 내림차순
+            latest_date_in_week, latest_price = date_price_list[0]
+            
             # 주 라벨 생성: "MM.DD~MM.DD" 형식
             # 연도가 바뀌는 경우도 고려 (예: 12.29~01.04)
             week_label = f"{week_start.month:02d}.{week_start.day:02d}~{week_end.month:02d}.{week_end.day:02d}"
             result.append({
                 "week": week_label,
                 "partName": part_name,
-                "price": avg_price,
+                "price": latest_price,  # 각 주의 가장 최신 날짜 가격만 사용
             })
     
     # 날짜 순서대로 정렬되어 반환됨
@@ -272,12 +291,26 @@ async def get_dashboard_price_history(
         "Beef_BottomRound": "소/설도",
         "Beef_Brisket": "소/양지",
         "Beef_Rib": "소/갈비",
+        # 수입 소고기
+        "Import_Beef_Brisket_US": "수입 소고기/양지(냉장) - 미국산",
+        "Import_Beef_Brisket_AU": "수입 소고기/양지(냉장) - 호주산",
+        "Import_Beef_Rib": "수입 소고기/갈비",
+        "Import_Beef_Rib_US": "수입 소고기/갈비 - 미국산",
+        "Import_Beef_Rib_AU": "수입 소고기/갈비 - 호주산",
+        "Import_Beef_Ribeye_US": "수입 소고기/갈비살 - 미국산",
+        "Import_Beef_Ribeye_AU": "수입 소고기/갈비살 - 호주산",
+        "Import_Beef_ChuckEye_US": "수입 소고기/척아이롤(냉장) - 미국산",
+        "Import_Beef_ChuckEye_AU": "수입 소고기/척아이롤(냉장) - 호주산",
+        "Import_Beef_ChuckEye_Frozen_US": "수입 소고기/척아이롤(냉동) - 미국산",
+        "Import_Beef_ChuckEye_Frozen_AU": "수입 소고기/척아이롤(냉동) - 호주산",
     }
     pork_part_map = {
         "Pork_Shoulder": "돼지/앞다리",
         "Pork_Belly": "돼지/삼겹살",
         "Pork_Rib": "돼지/갈비",
         "Pork_Loin": "돼지/목심",
+        # 수입 돼지고기
+        "Import_Pork_Belly": "수입 돼지고기/삼겹살",
     }
     default_beef = [("Beef_Ribeye", "소/등심")]
     default_pork = [("Pork_Belly", "돼지/삼겹살")]
