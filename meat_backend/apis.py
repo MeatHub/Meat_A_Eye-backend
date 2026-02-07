@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -85,24 +85,6 @@ GRADE_CODE_MAP: dict[str, str] = {
     "03": "1등급",
     "81": "미국산",
     "82": "호주산",
-}
-
-# monthlyPriceTrendList API용 품목코드 (productno). itemcode+kindcode 6자리 또는 KAMIS 품목코드표 기준.
-PART_PRODUCTNO: dict[str, str] = {
-    "Beef_Tenderloin": "430121",
-    "Beef_Ribeye": "430122",
-    "Beef_Sirloin": "430123",
-    "Beef_Chuck": "430124",
-    "Beef_Shoulder": "430125",
-    "Beef_Round": "430127",
-    "Beef_BottomRound": "430136",
-    "Beef_Brisket": "430140",
-    "Beef_Shank": "430129",
-    "Beef_Rib": "430150",
-    "Pork_Shoulder": "430425",
-    "Pork_Belly": "430427",
-    "Pork_Rib": "430428",
-    "Pork_Loin": "430468",
 }
 
 PART_TO_CODES: dict[str, dict[str, Any]] = {
@@ -281,8 +263,10 @@ async def fetch_kamis_price(
 
     base = (settings.kamis_api_url or "https://www.kamis.or.kr/service/price/xml.do").strip()
     today = date.today()
-    end_day = today.strftime("%Y-%m-%d")
-    start_day = (today - timedelta(days=7)).strftime("%Y-%m-%d")  # 7일전
+    # API는 어제 날짜까지만 데이터가 있으므로 어제 날짜를 end_day로 사용
+    yesterday = today - timedelta(days=1)
+    end_day = yesterday.strftime("%Y-%m-%d")
+    start_day = (yesterday - timedelta(days=7)).strftime("%Y-%m-%d")  # 어제 기준 7일전
 
     codes = _get_codes(part_name)
     if (part_name not in PART_TO_CODES and codes.get("food_nm") == part_name) or not codes.get("itemcode"):
@@ -291,24 +275,61 @@ async def fetch_kamis_price(
             detail=f"{part_name} 실시간 데이터를 알 수 없습니다.",
         )
     
-    # 지역코드 매핑 (전국 = 빈 문자열)
-    county_code = "" if region == "전국" else region
+    # 지역코드 매핑 (KAMIS API 소매가격 지역코드)
+    # 소매가격: 1101(서울), 2100(부산), 2200(대구), 2300(인천), 2401(광주), 2501(대전), 2601(울산), 
+    # 3111(수원), 3214(강릉), 3211(춘천), 3311(청주), 3511(전주), 3711(포항), 3911(제주), 
+    # 3113(의정부), 3613(순천), 3714(안동), 3814(창원), 3145(용인), 2701(세종), 3112(성남), 
+    # 3138(고양), 3411(천안), 3818(김해)
+    region_code_map = {
+        "전국": "",
+        "서울": "1101",
+        "부산": "2100",
+        "대구": "2200",
+        "인천": "2300",
+        "광주": "2401",
+        "대전": "2501",
+        "울산": "2601",
+        "세종": "2701",
+        "수원": "3111",
+        "강릉": "3214",
+        "춘천": "3211",
+        "청주": "3311",
+        "전주": "3511",
+        "포항": "3711",
+        "제주": "3911",
+        "의정부": "3113",
+        "순천": "3613",
+        "안동": "3714",
+        "창원": "3814",
+        "용인": "3145",
+        "성남": "3112",
+        "고양": "3138",
+        "천안": "3411",
+        "김해": "3818",
+    }
+    county_code = region_code_map.get(region, region)  # 매핑되지 않은 경우 원본 값 사용
     
-    # 등급코드 "00" (전체 평균)일 때는 등급코드를 빈 문자열로 보내서 모든 등급 데이터 조회
-    # 그 후 클라이언트에서 평균 계산
-    product_rank_code = "" if grade_code == "00" else grade_code
+    # 등급코드 처리: 소고기만 등급 구분이 있음, 돼지는 항상 전체 평균
+    is_beef = part_name.startswith("Beef_")
+    if is_beef:
+        # 소고기: 등급코드 "00" (전체 평균)일 때는 빈 문자열, 아니면 해당 등급코드 사용
+        product_rank_code = "" if grade_code == "00" else grade_code
+    else:
+        # 돼지: 항상 전체 평균 (등급 구분 없음)
+        product_rank_code = ""
     
     params = {
-        "action": "periodProductList",
+        "action": "periodRetailProductList",  # 소매가격 조회 액션
         "p_cert_key": key,
         "p_cert_id": cert_id,
-        "p_returntype": "json",  # json으로 변경
+        "p_returntype": "xml",  # XML 형식 사용 (사용자 예시와 동일)
         "p_startday": start_day,
         "p_endday": end_day,
+        "p_itemcategorycode": codes.get("category", "500"),  # 품목카테고리코드 추가
         "p_itemcode": codes.get("itemcode", ""),
         "p_kindcode": codes.get("kindcode", ""),
-        "p_productrankcode": product_rank_code,  # 등급코드 (00일 때는 빈 문자열)
-        "p_countycode": county_code,  # 지역코드 추가
+        "p_productrankcode": product_rank_code,  # 등급코드 (소고기만 사용, 돼지는 항상 빈 문자열)
+        "p_countrycode": county_code,  # 지역코드 (p_countrycode 사용)
         "p_convert_kg_yn": "N",
     }
 
@@ -408,19 +429,44 @@ async def fetch_kamis_price(
     grade_seen: set[str] = set()
     target_name = codes.get("food_nm", "")
 
-    def _extract_grade(name: str) -> str:
-        """제품명에서 등급 정보 추출"""
-        if not name:
+    def _extract_grade(item_data: dict, product_name: str) -> str:
+        """API 응답 데이터와 제품명에서 등급 정보 추출"""
+        # 1. API 응답에서 직접 등급 정보 확인 (productrankcode, productrankname)
+        productrankcode = item_data.get("productrankcode") or item_data.get("productrankcode") or ""
+        productrankname = item_data.get("productrankname") or item_data.get("productrank") or ""
+        
+        # 등급코드를 등급명으로 매핑 (API는 "1", "2", "3" 형식으로 올 수 있음)
+        if productrankcode:
+            rankcode_str = str(productrankcode).strip()
+            # "1" -> "01", "2" -> "02" 등으로 정규화
+            rankcode_map = {"1": "01", "2": "02", "3": "03", "0": "00", "": "00"}
+            normalized_code = rankcode_map.get(rankcode_str, rankcode_str.zfill(2))
+            
+            grade_code_map = {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"}
+            mapped_grade = grade_code_map.get(normalized_code)
+            if mapped_grade:
+                return mapped_grade
+        
+        # 등급명 직접 확인
+        if productrankname:
+            productrankname_str = str(productrankname).strip()
+            grade_keywords = ["1++등급", "1+등급", "1등급", "2등급", "3등급", "전체"]
+            for keyword in grade_keywords:
+                if keyword in productrankname_str:
+                    return keyword
+        
+        # 2. 제품명에서 등급 정보 추출
+        if not product_name:
             return "일반"
         # 괄호 안의 등급 정보 추출 (예: "소/등심(1++등급)" -> "1++등급")
-        if "(" in name and ")" in name:
-            grade_in_paren = name.split("(", 1)[1].split(")", 1)[0]
+        if "(" in product_name and ")" in product_name:
+            grade_in_paren = product_name.split("(", 1)[1].split(")", 1)[0]
             if grade_in_paren:
                 return grade_in_paren
         # 등급 키워드 직접 검색
         grade_keywords = ["1++등급", "1+등급", "1등급", "2등급", "3등급", "전체"]
         for keyword in grade_keywords:
-            if keyword in name:
+            if keyword in product_name:
                 return keyword
         return "일반"
 
@@ -431,10 +477,29 @@ async def fetch_kamis_price(
     for item in items:
         if not isinstance(item, dict):
             continue
-        # JSON 응답 필드명: itemname, kindname, price, regday 등
-        # XML 응답 필드명: productName, item_name, dpr1, regday 등
-        # KAMIS API 응답에서 itemname과 kindname이 빈 배열 []로 올 수 있음
-        # 이미 itemcode와 kindcode로 필터링된 데이터이므로 제품명 매칭 불필요
+        
+        # countyname 필터링: "평균", "평년" 제외하고 실제 지역명만 사용
+        countyname = str(item.get("countyname", "")).strip()
+        if countyname in ("평균", "평년", ""):
+            # 전국 조회가 아닌 경우, 평균/평년 데이터는 제외
+            if region != "전국":
+                continue
+        # 특정 지역 조회 시 해당 지역명과 일치하는 데이터만 사용
+        elif region != "전국":
+            region_name_map = {
+                "서울": "서울", "부산": "부산", "대구": "대구", "인천": "인천",
+                "광주": "광주", "대전": "대전", "울산": "울산", "세종": "세종",
+                "수원": "수원", "강릉": "강릉", "춘천": "춘천", "청주": "청주",
+                "전주": "전주", "포항": "포항", "제주": "제주", "의정부": "의정부",
+                "순천": "순천", "안동": "안동", "창원": "창원", "용인": "용인",
+                "성남": "성남", "고양": "고양", "천안": "천안", "김해": "김해",
+            }
+            expected_countyname = region_name_map.get(region, region)
+            if countyname != expected_countyname:
+                continue
+        
+        # periodRetailProductList API 응답: itemname="소", kindname="안심(100g)"
+        # itemcode와 kindcode로 이미 정확한 부위를 필터링했으므로 제품명 매칭 불필요
         itemname_val = item.get("itemname")
         kindname_val = item.get("kindname")
         
@@ -444,39 +509,33 @@ async def fetch_kamis_price(
         elif itemname_val is None:
             itemname_val = ""
         else:
-            itemname_val = str(itemname_val)
+            itemname_val = str(itemname_val).strip()
             
         if isinstance(kindname_val, list):
             kindname_val = kindname_val[0] if kindname_val else ""
         elif kindname_val is None:
             kindname_val = ""
         else:
-            kindname_val = str(kindname_val)
+            kindname_val = str(kindname_val).strip()
         
-        product_name = str(
-            item.get("productName")
-            or itemname_val
-            or item.get("item_name")
-            or kindname_val
-            or item.get("productname")
-            or ""
-        )
+        # itemname과 kindname을 결합하여 제품명 생성 (예: "소/안심")
+        if itemname_val and kindname_val:
+            # kindname에서 단위 제거 (예: "안심(100g)" -> "안심")
+            kindname_clean = kindname_val.split("(")[0].strip()
+            product_name = f"{itemname_val}/{kindname_clean}"
+        else:
+            product_name = str(
+                item.get("productName")
+                or itemname_val
+                or item.get("item_name")
+                or kindname_val
+                or item.get("productname")
+                or ""
+            )
         
-        # itemcode와 kindcode로 이미 필터링된 데이터이므로 제품명 매칭 건너뛰기
-        # 제품명이 비어있으면 (itemname/kindname이 빈 배열인 경우) 매칭 체크 완전히 건너뛰기
-        # 제품명이 있고 명시적으로 다른 제품인 경우만 제외
-        if target_name and product_name and product_name.strip():
-            # 제품명이 명시적으로 다른 경우만 제외 (예: "소/등심" vs "돼지/삼겹살")
-            target_parts = target_name.replace("/", " ").split()
-            product_parts = product_name.replace("/", " ").split()
-            # 타겟의 주요 키워드가 제품명에 없는 경우만 제외
-            if len(target_parts) > 0 and len(product_parts) > 0:
-                main_keyword = target_parts[-1]  # "등심", "갈비" 등
-                product_keyword = product_parts[-1]
-                # 완전히 다른 제품인 경우만 제외 (예: "등심" vs "삼겹살")
-                if main_keyword != product_keyword and product_keyword:
-                    print(f"DEBUG: 제품명 불일치 | target={target_name} | product={product_name} | keyword={main_keyword}")
-                    continue
+        # itemcode와 kindcode로 이미 필터링된 데이터이므로 제품명 매칭 완전히 건너뛰기
+        # periodRetailProductList는 itemcode/kindcode로 정확한 부위를 조회하므로
+        # 추가 제품명 필터링 불필요
         unit = (item.get("unit") or "").lower()
         # JSON 응답에서는 단위 정보가 없을 수 있으므로 100g 체크 완화
         # 단위가 없거나 100g가 아닌 경우도 허용 (API 응답 형식에 따라 다를 수 있음)
@@ -499,21 +558,92 @@ async def fetch_kamis_price(
         if price_value <= 0:
             print(f"DEBUG: 가격이 0 이하이므로 스킵 | price={raw_price}")
             continue
-        grade = _extract_grade(product_name)
+        
+        # 등급 정보 추출 (API 응답 데이터 포함)
+        grade = _extract_grade(item, product_name)
+        
+        # 등급 필터링: periodRetailProductList는 이미 p_productrankcode로 필터링된 결과를 반환
+        # 따라서 각 아이템의 등급 필터링은 완화 (API 요청 시 이미 필터링됨)
+        if grade_code != "00":  # 전체 평균이 아닌 경우
+            # API 요청 시 이미 등급으로 필터링되었으므로, 응답의 모든 아이템이 해당 등급
+            # 다만 명시적으로 다른 등급이 표시된 경우만 제외
+            grade_code_map = codes.get("grade_codes", {})
+            target_grade_name = grade_code_map.get(grade_code, "")
+            
+            # API 응답의 productrankcode 확인 (있으면 우선 사용)
+            item_productrankcode = str(item.get("productrankcode", "")).strip()
+            if item_productrankcode:
+                rankcode_map = {"1": "01", "2": "02", "3": "03", "0": "00", "": "00"}
+                normalized_code = rankcode_map.get(item_productrankcode, item_productrankcode.zfill(2))
+                # 등급코드가 명시적으로 다르면 제외 (단, 빈 문자열이나 "0"은 전체 평균이므로 허용)
+                if normalized_code and normalized_code != "00" and normalized_code != grade_code:
+                    print(f"DEBUG: 등급코드 불일치 스킵 | 선택한 등급코드={grade_code} | API 등급코드={item_productrankcode}(정규화={normalized_code})")
+                    continue
+            # 등급명으로 확인 (fallback) - 명시적으로 다른 등급인 경우만 제외
+            elif target_grade_name and grade:
+                # 등급명이 명시적으로 다르고, "일반"이 아닌 경우만 제외
+                if grade != "일반" and target_grade_name not in grade and grade not in target_grade_name:
+                    # 예: "1++등급" vs "1+등급" 같은 경우는 제외
+                    if any(g in grade for g in ["1++등급", "1+등급", "1등급", "2등급", "3등급"]):
+                        print(f"DEBUG: 등급명 불일치 스킵 | 선택한 등급={target_grade_name} | 실제 등급={grade}")
+                        continue
+        
         if grade in grade_seen:
             continue
         grade_seen.add(grade)
+        # API 응답에서 실제 날짜 추출 및 정규화
+        # KAMIS API는 regday가 "02/06" 형식(MM/DD)이고 yyyy 필드가 별도로 제공됨
+        yyyy_field = str(item.get("yyyy", "")).strip()
+        regday_raw = item.get("regday") or item.get("lastest_day") or ""
+        
+        price_date = None
+        if regday_raw:
+            regday_str = str(regday_raw).strip()
+            # 케이스 1: "02/06" 형식 (MM/DD) - yyyy 필드 필수 사용
+            if "/" in regday_str:
+                parts = regday_str.split("/")
+                if len(parts) == 2 and yyyy_field:
+                    # MM/DD 형식이면 yyyy 필드와 결합
+                    price_date = f"{yyyy_field}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
+                elif len(parts) == 3:
+                    # "2025/02/06" 형식
+                    price_date = "-".join(parts)
+            # 케이스 2: "2025-02-06" 형식
+            elif "-" in regday_str and len(regday_str) >= 10:
+                price_date = regday_str[:10]
+            # 케이스 3: "20250206" 형식 (8자리 숫자)
+            elif len(regday_str) == 8 and regday_str.isdigit():
+                price_date = f"{regday_str[:4]}-{regday_str[4:6]}-{regday_str[6:8]}"
+        
+        # 날짜 검증 및 오늘 이후 필터링
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+        if price_date:
+            try:
+                date_obj = datetime.strptime(price_date[:10], "%Y-%m-%d").date()
+                # 오늘 날짜를 넘어가는 데이터는 제외 (어제까지만 유효)
+                if date_obj > yesterday:
+                    logger.debug(f"날짜 필터링: {price_date}는 어제({yesterday}) 이후이므로 제외")
+                    continue  # 이 아이템은 건너뛰기
+                # 2000년 이전이나 2100년 이후의 비정상적인 날짜 제외
+                elif date_obj.year < 2000 or date_obj.year > 2100:
+                    logger.warning(f"비정상적인 날짜: {price_date} (년도: {date_obj.year}), 제외")
+                    continue  # 이 아이템은 건너뛰기
+                # API 응답의 실제 날짜를 그대로 사용 (어제보다 오래된 날짜도 유지)
+            except (ValueError, TypeError) as e:
+                logger.warning(f"날짜 파싱 실패: {price_date}, 에러: {e}, 제외")
+                continue  # 이 아이템은 건너뛰기
+        else:
+            # 날짜가 없으면 제외
+            logger.debug("날짜 정보가 없는 아이템 제외")
+            continue
+        
         grade_prices.append(
             {
                 "grade": grade,
                 "price": price_value,
                 "unit": "100g",
-                "priceDate": (
-                    item.get("lastest_day")
-                    or item.get("regday")
-                    or item.get("yyyy", "") + "/" + item.get("regday", "")
-                    or end_day
-                ),
+                "priceDate": price_date,
                 "trend": _trend_from_direction(item.get("direction")),
             }
         )
@@ -526,41 +656,109 @@ async def fetch_kamis_price(
             detail=f"{target_label} 실시간 데이터를 알 수 없습니다.",
         )
 
+    # 가장 최근 날짜 찾기 (API 응답의 실제 날짜 사용)
+    def parse_date(date_str: str) -> date | None:
+        """날짜 문자열을 date 객체로 변환"""
+        if not date_str:
+            return None
+        try:
+            # "YYYY-MM-DD" 형식만 처리
+            date_str = str(date_str).strip()
+            if len(date_str) >= 10:
+                return datetime.strptime(date_str[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            pass
+        return None
+    
+    # API 응답의 실제 최신 날짜 찾기
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    latest_date = None
+    latest_prices = []
+    
+    for gp in grade_prices:
+        price_date = parse_date(gp.get("priceDate", ""))
+        if price_date:
+            # 오늘 날짜를 넘어가는 데이터는 제외 (어제까지만 유효)
+            if price_date > yesterday:
+                continue
+            # API 응답의 실제 날짜 중 가장 최신 날짜 찾기
+            if latest_date is None or price_date > latest_date:
+                latest_date = price_date
+                latest_prices = [gp]
+            elif price_date == latest_date:
+                latest_prices.append(gp)
+    
+    # 최근 날짜 데이터가 없으면 모든 데이터 중 가장 최신 날짜 찾기
+    if not latest_prices or latest_date is None:
+        # 모든 가격 중 가장 최근 날짜 찾기
+        for gp in grade_prices:
+            price_date = parse_date(gp.get("priceDate", ""))
+            if price_date:
+                if latest_date is None or price_date > latest_date:
+                    latest_date = price_date
+                    latest_prices = [gp]
+                elif price_date == latest_date:
+                    latest_prices.append(gp)
+        
+        # 여전히 날짜를 찾지 못한 경우 첫 번째 항목 사용
+        if latest_date is None:
+            if grade_prices:
+                latest_prices = [grade_prices[0]]
+                latest_date = parse_date(grade_prices[0].get("priceDate", ""))
+    
     grade_order = {grade: idx for idx, grade in enumerate(codes.get("grades", []))}
-    grade_prices.sort(key=lambda x: grade_order.get(x["grade"], 99))
-    debug_summary = ", ".join(f"{gp['grade']}:{gp['price']}" for gp in grade_prices)
-    print(f"DEBUG: REAL API PARSED KAMIS | gradeCode={grade_code} | gradePrices=[{debug_summary}]")
+    latest_prices.sort(key=lambda x: grade_order.get(x["grade"], 99))
+    debug_summary = ", ".join(f"{gp['grade']}:{gp['price']}" for gp in latest_prices)
+    print(f"DEBUG: REAL API PARSED KAMIS | gradeCode={grade_code} | latestDate={latest_date} | gradePrices=[{debug_summary}]")
     
     # 등급코드에 맞는 가격 선택
     primary = None
     if grade_code == "00":
         # 전체 평균: 모든 등급의 평균 계산
-        if grade_prices:
-            avg_price = sum(gp["price"] for gp in grade_prices) / len(grade_prices)
+        if latest_prices:
+            avg_price = sum(gp["price"] for gp in latest_prices) / len(latest_prices)
             primary = {
                 "grade": "전체 평균",
                 "price": int(avg_price),
-                "unit": grade_prices[0]["unit"],
-                "priceDate": grade_prices[0]["priceDate"],
-                "trend": grade_prices[0]["trend"],
+                "unit": latest_prices[0]["unit"],
+                "priceDate": str(latest_date) if latest_date else latest_prices[0]["priceDate"],
+                "trend": latest_prices[0]["trend"],
             }
-            print(f"DEBUG: 전체 평균 계산 | 평균가격={primary['price']}원 (등급 수={len(grade_prices)})")
+            print(f"DEBUG: 전체 평균 계산 | 평균가격={primary['price']}원 (등급 수={len(latest_prices)}, 날짜={latest_date})")
         else:
-            primary = grade_prices[0] if grade_prices else None
+            primary = latest_prices[0] if latest_prices else None
     else:
         # 특정 등급 선택: grade_code에 해당하는 등급 찾기
         grade_code_map = codes.get("grade_codes", {})
         target_grade_name = grade_code_map.get(grade_code, "")
         
-        # 등급명으로 매칭 (예: "1++등급", "1+등급", "1등급")
-        for gp in grade_prices:
-            if target_grade_name and target_grade_name in gp["grade"]:
-                primary = gp
-                break
+        # 등급명으로 정확히 매칭 (예: "1++등급", "1+등급", "1등급")
+        # 정확한 매칭 우선, 부분 매칭은 후순위
+        exact_match = None
+        partial_match = None
         
-        # 매칭 실패 시 첫 번째 항목 사용
-        if not primary and grade_prices:
-            primary = grade_prices[0]
+        for gp in latest_prices:
+            grade_name = gp.get("grade", "")
+            # 정확한 매칭 (예: "1++등급" == "1++등급")
+            if target_grade_name and grade_name == target_grade_name:
+                exact_match = gp
+                break
+            # 부분 매칭 (예: "1++등급" in "안심 1++등급")
+            elif target_grade_name and target_grade_name in grade_name and not partial_match:
+                partial_match = gp
+        
+        if exact_match:
+            primary = exact_match
+            primary["priceDate"] = str(latest_date) if latest_date else primary["priceDate"]
+        elif partial_match:
+            primary = partial_match
+            primary["priceDate"] = str(latest_date) if latest_date else primary["priceDate"]
+            print(f"⚠️ [WARNING] 등급코드 {grade_code} 부분 매칭: {primary['grade']}")
+        elif latest_prices:
+            # 매칭 실패 시 첫 번째 항목 사용
+            primary = latest_prices[0]
+            primary["priceDate"] = str(latest_date) if latest_date else primary["priceDate"]
             print(f"⚠️ [WARNING] 등급코드 {grade_code}에 해당하는 등급을 찾지 못함. 첫 번째 항목 사용: {primary['grade']}")
     
     if not primary:
@@ -570,13 +768,16 @@ async def fetch_kamis_price(
             detail=f"{target_label} 실시간 데이터를 알 수 없습니다.",
         )
     
+    # 최종 날짜: API 응답의 실제 최신 날짜 사용
+    final_date = latest_date if latest_date else yesterday
+    
     return {
         "currentPrice": primary["price"],
         "unit": primary["unit"],
         "trend": primary["trend"],
-        "price_date": primary["priceDate"],
+        "price_date": str(final_date),  # API 응답의 실제 날짜 사용
         "source": "api",
-        "gradePrices": grade_prices,
+        "gradePrices": latest_prices,
         "selectedGrade": primary.get("grade", "일반"),
     }
 
@@ -600,12 +801,14 @@ async def fetch_kamis_price_period(
 
     base = (settings.kamis_api_url or "https://www.kamis.or.kr/service/price/xml.do").strip()
     today = date.today()
-    end_day = today.strftime("%Y-%m-%d")
+    # API는 어제 날짜까지만 데이터가 있으므로 어제 날짜를 end_day로 사용
+    yesterday = today - timedelta(days=1)
+    end_day = yesterday.strftime("%Y-%m-%d")
     if weeks is not None and weeks > 0:
         days = min(weeks * 7, 365)
     else:
         days = min((months or 6) * 31, 365)
-    start_day = (today - timedelta(days=days)).strftime("%Y-%m-%d")
+    start_day = (yesterday - timedelta(days=days)).strftime("%Y-%m-%d")
 
     codes = _get_codes(part_name)
     if (part_name not in PART_TO_CODES and codes.get("food_nm") == part_name) or not codes.get("itemcode"):
@@ -614,20 +817,57 @@ async def fetch_kamis_price_period(
             detail=f"{part_name} 기간 데이터를 알 수 없습니다.",
         )
 
-    county_code = "" if region == "전국" else region
-    product_rank_code = "" if grade_code == "00" else grade_code
+    # 지역코드 매핑 (fetch_kamis_price와 동일)
+    region_code_map = {
+        "전국": "",
+        "서울": "1101",
+        "부산": "2100",
+        "대구": "2200",
+        "인천": "2300",
+        "광주": "2401",
+        "대전": "2501",
+        "울산": "2601",
+        "세종": "2701",
+        "수원": "3111",
+        "강릉": "3214",
+        "춘천": "3211",
+        "청주": "3311",
+        "전주": "3511",
+        "포항": "3711",
+        "제주": "3911",
+        "의정부": "3113",
+        "순천": "3613",
+        "안동": "3714",
+        "창원": "3814",
+        "용인": "3145",
+        "성남": "3112",
+        "고양": "3138",
+        "천안": "3411",
+        "김해": "3818",
+    }
+    county_code = region_code_map.get(region, region)
+    
+    # 등급코드 처리: 소고기만 등급 구분이 있음, 돼지는 항상 전체 평균
+    is_beef = part_name.startswith("Beef_")
+    if is_beef:
+        # 소고기: 등급코드 "00" (전체 평균)일 때는 빈 문자열, 아니면 해당 등급코드 사용
+        product_rank_code = "" if grade_code == "00" else grade_code
+    else:
+        # 돼지: 항상 전체 평균 (등급 구분 없음)
+        product_rank_code = ""
 
     params = {
-        "action": "periodProductList",
+        "action": "periodRetailProductList",  # 소매가격 조회 액션
         "p_cert_key": key,
         "p_cert_id": cert_id,
-        "p_returntype": "json",
+        "p_returntype": "xml",  # XML 형식 사용
         "p_startday": start_day,
         "p_endday": end_day,
+        "p_itemcategorycode": codes.get("category", "500"),  # 품목카테고리코드 추가
         "p_itemcode": codes.get("itemcode", ""),
         "p_kindcode": codes.get("kindcode", ""),
-        "p_productrankcode": product_rank_code,
-        "p_countycode": county_code,
+        "p_productrankcode": product_rank_code,  # 등급코드 (소고기만 사용, 돼지는 항상 빈 문자열)
+        "p_countrycode": county_code,  # 지역코드 (p_countrycode 사용)
         "p_convert_kg_yn": "N",
     }
 
@@ -675,10 +915,32 @@ async def fetch_kamis_price_period(
     target_name = codes.get("food_nm", "")
     result: list[dict[str, Any]] = []
     seen_dates: set[str] = set()
+    today = date.today()
 
     for item in items:
         if not isinstance(item, dict):
             continue
+        
+        # countyname 필터링: "평균", "평년" 제외하고 실제 지역명만 사용
+        countyname = str(item.get("countyname", "")).strip()
+        if countyname in ("평균", "평년", ""):
+            # 전국 조회가 아닌 경우, 평균/평년 데이터는 제외
+            if region != "전국":
+                continue
+        # 특정 지역 조회 시 해당 지역명과 일치하는 데이터만 사용
+        elif region != "전국":
+            region_name_map = {
+                "서울": "서울", "부산": "부산", "대구": "대구", "인천": "인천",
+                "광주": "광주", "대전": "대전", "울산": "울산", "세종": "세종",
+                "수원": "수원", "강릉": "강릉", "춘천": "춘천", "청주": "청주",
+                "전주": "전주", "포항": "포항", "제주": "제주", "의정부": "의정부",
+                "순천": "순천", "안동": "안동", "창원": "창원", "용인": "용인",
+                "성남": "성남", "고양": "고양", "천안": "천안", "김해": "김해",
+            }
+            expected_countyname = region_name_map.get(region, region)
+            if countyname != expected_countyname:
+                continue
+        
         raw_price = (
             item.get("price")
             or item.get("dpr1")
@@ -693,185 +955,65 @@ async def fetch_kamis_price_period(
             price_value = 0
         if price_value <= 0:
             continue
+        # 날짜 추출: KAMIS API는 regday가 "02/06" 형식(MM/DD)이고 yyyy 필드가 별도로 제공됨
         yyyy = str(item.get("yyyy", "")).strip()
-        regday = (
-            item.get("lastest_day")
-            or item.get("regday")
-            or (yyyy + "-" + str(item.get("mm", "")) + "-" + str(item.get("dd", "")) if yyyy else "")
-        )
-        if not regday or not isinstance(regday, str):
+        regday_raw = item.get("regday") or item.get("lastest_day") or ""
+        
+        if not regday_raw or not isinstance(regday_raw, str):
             continue
-        regday = str(regday).strip()
-        # KAMIS periodProductList: yyyy="2025", regday="02/06" (MM/DD) → YYYY-MM-DD
-        if yyyy and ("/" in regday or "-" in regday) and len(regday) <= 5:
-            regday = f"{yyyy}-{regday.replace('/', '-')}"
-        # 정규화: YYYY-MM-DD
-        elif "/" in regday:
-            regday = regday.replace("/", "-")
-        if len(regday) == 8 and regday.isdigit():
-            regday = f"{regday[:4]}-{regday[4:6]}-{regday[6:8]}"
-        if len(regday) < 10 or regday in seen_dates:
+        
+        regday_str = str(regday_raw).strip()
+        regday = None
+        
+        # 날짜 형식 정규화
+        # 케이스 1: "02/06" 형식 (MM/DD) - yyyy 필드 필수 사용
+        if "/" in regday_str:
+            parts = regday_str.split("/")
+            if len(parts) == 2 and yyyy:
+                # MM/DD 형식이면 yyyy 필드와 결합
+                regday = f"{yyyy}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
+            elif len(parts) == 3:
+                # "2025/02/06" 형식
+                regday = "-".join(parts)
+            else:
+                continue
+        
+        # 케이스 2: "20250206" 형식 (8자리 숫자)
+        elif len(regday_str) == 8 and regday_str.isdigit():
+            regday = f"{regday_str[:4]}-{regday_str[4:6]}-{regday_str[6:8]}"
+        
+        # 케이스 3: 이미 "YYYY-MM-DD" 형식
+        elif "-" in regday_str and len(regday_str) >= 10:
+            regday = regday_str[:10]
+        
+        # 날짜 형식 검증
+        if not regday or len(regday) < 10:
             continue
+        
+        # 중복 날짜 체크
+        if regday in seen_dates:
+            continue
+        
+        # 날짜 파싱 및 오늘 이후 날짜 필터링
+        try:
+            date_obj = datetime.strptime(regday[:10], "%Y-%m-%d").date()
+            # 오늘 날짜를 넘어가는 데이터는 제외
+            if date_obj > today:
+                logger.debug(f"날짜 필터링: {regday}는 오늘({today}) 이후이므로 제외")
+                continue
+            # 2000년 이전이나 2100년 이후의 비정상적인 날짜 제외
+            if date_obj.year < 2000 or date_obj.year > 2100:
+                logger.warning(f"비정상적인 날짜: {regday} (년도: {date_obj.year})")
+                continue
+        except (ValueError, TypeError) as e:
+            logger.warning(f"날짜 파싱 실패: {regday}, 에러: {e}")
+            continue
+        
         seen_dates.add(regday)
         result.append({"date": regday, "price": price_value})
 
     result.sort(key=lambda x: x["date"])
     return result
-
-
-async def fetch_kamis_monthly_trend(
-    part_name: str,
-    regday: str | None = None,
-) -> list[dict[str, Any]]:
-    """
-    KAMIS 월평균 가격추이 API (monthlyPriceTrendList).
-    요청: action=monthlyPriceTrendList, p_productno(필수), p_regday(선택).
-    Returns: [ {"month": "2025-09", "price": 12000}, ... ]
-    """
-    key = (settings.kamis_api_key or "").strip()
-    cert_id = (settings.kamis_cert_id or "pak101044").strip()
-    if not key:
-        raise HTTPException(status_code=503, detail="KAMIS API 키가 설정되지 않았습니다.")
-
-    productno = PART_PRODUCTNO.get(part_name)
-    if not productno:
-        codes = _get_codes(part_name)
-        if codes.get("itemcode") and codes.get("kindcode"):
-            productno = (codes.get("itemcode", "") or "") + (codes.get("kindcode", "") or "")
-        if not productno:
-            raise HTTPException(
-                status_code=404,
-                detail=f"{part_name} 월별 시세 품목코드를 알 수 없습니다.",
-            )
-
-    base = (settings.kamis_api_url or "https://www.kamis.or.kr/service/price/xml.do").strip()
-    params: dict[str, str] = {
-        "action": "monthlyPriceTrendList",
-        "p_cert_key": key,
-        "p_cert_id": cert_id,
-        "p_returntype": "json",
-        "p_productno": productno,
-    }
-    if regday:
-        params["p_regday"] = regday
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            req = client.build_request("GET", base, params=params)
-            resp = await client.send(req)
-            resp.raise_for_status()
-            payload = resp.text
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"KAMIS 월별시세 API 연결 실패: HTTP {exc.response.status_code}",
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"KAMIS 월별시세 API 연결 실패: {exc}") from exc
-
-    parsed = _parse_response(payload, "KAMIS monthlyPriceTrendList")
-
-    def _collect_items(node: Any) -> list:
-        collected: list = []
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if key == "item":
-                    collected.extend(_ensure_list(value))
-                else:
-                    collected.extend(_collect_items(value))
-        elif isinstance(node, list):
-            for child in node:
-                collected.extend(_collect_items(child))
-        return collected
-
-    items: list[dict[str, Any]] = []
-    if "document" in parsed:
-        document = parsed.get("document", {}) or {}
-        data = document.get("data", {})
-        if isinstance(data, dict) and str(data.get("error_code", "000")) in ("0", "000"):
-            items = _ensure_list(data.get("item"))
-        if not items:
-            items = _collect_items(document)
-    if not items and "data" in parsed:
-        data = parsed.get("data", {})
-        if isinstance(data, dict):
-            if str(data.get("error_code", "000")) not in ("0", "000"):
-                error_msg = data.get("error_msg") or data.get("message") or "알 수 없는 오류"
-                raise HTTPException(status_code=502, detail=f"KAMIS 월별시세: {error_msg}")
-            items = _ensure_list(data.get("item"))
-    if not items and isinstance(parsed, dict) and "item" in parsed:
-        items = _ensure_list(parsed.get("item"))
-
-    result: list[dict[str, Any]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        yyyymm = item.get("yyyymm") or item.get("month") or item.get("regday", "")
-        if not yyyymm:
-            continue
-        raw_price = (
-            item.get("price")
-            or item.get("avgPrc")
-            or item.get("dpr1")
-            or item.get("value")
-        )
-        try:
-            price_value = int(float(str(raw_price).replace(",", "")))
-        except (TypeError, ValueError):
-            price_value = 0
-        if price_value <= 0:
-            continue
-        month_str = str(yyyymm).replace("/", "-")
-        if len(month_str) == 6 and month_str.isdigit():
-            month_str = f"{month_str[:4]}-{month_str[4:6]}"
-        result.append({"month": month_str, "price": price_value})
-
-    result.sort(key=lambda x: x["month"])
-    return result
-
-
-async def check_kamis_monthly_trend_connection() -> dict[str, Any]:
-    """
-    KAMIS monthlyPriceTrendList API 연결 확인.
-    Returns: { "connected": True, "message": "..." } or raises HTTPException.
-    """
-    key = (settings.kamis_api_key or "").strip()
-    cert_id = (settings.kamis_cert_id or "pak101044").strip()
-    if not key:
-        return {"connected": False, "message": "KAMIS API 키가 설정되지 않았습니다."}
-
-    base = (settings.kamis_api_url or "https://www.kamis.or.kr/service/price/xml.do").strip()
-    params = {
-        "action": "monthlyPriceTrendList",
-        "p_cert_key": key,
-        "p_cert_id": cert_id,
-        "p_returntype": "json",
-        "p_productno": "430122",  # 소/등심 품목코드로 연결 테스트
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            req = client.build_request("GET", base, params=params)
-            resp = await client.send(req)
-            resp.raise_for_status()
-            payload = resp.text
-    except Exception as e:
-        return {"connected": False, "message": f"KAMIS 월별시세 API 연결 실패: {e}"}
-
-    try:
-        parsed = _parse_response(payload, "KAMIS monthlyPriceTrendList")
-        data = parsed.get("data") or (parsed.get("document") or {}).get("data") or {}
-        if isinstance(data, dict) and str(data.get("error_code", "000")) not in ("0", "000"):
-            msg = data.get("error_msg") or data.get("message") or "API 오류"
-            return {"connected": False, "message": msg}
-        items = _ensure_list(data.get("item")) or _ensure_list(parsed.get("item"))
-        if items:
-            return {"connected": True, "message": "KAMIS 월별 가격추이 API 연결됨"}
-        return {"connected": True, "message": "KAMIS 월별 가격추이 API 응답 정상 (데이터 없음)"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {"connected": False, "message": f"응답 파싱 실패: {e}"}
 
 
 # 영양정보 (DB meat_nutrition 사용 — NutritionService 참고)

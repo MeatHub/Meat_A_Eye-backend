@@ -1,7 +1,7 @@
 """대시보드 API - 실시간 인기 부위, 통계 등."""
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,7 +9,7 @@ from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
-from ..apis import fetch_kamis_price_period, check_kamis_monthly_trend_connection
+from ..apis import fetch_kamis_price_period
 from ..config.database import get_db
 from ..models.recognition_log import RecognitionLog
 from ..services.price_service import PriceService
@@ -185,47 +185,69 @@ class PriceHistoryResponse(BaseModel):
 
 def _aggregate_daily_by_week(daily: list[dict], part_name: str) -> list[dict]:
     """
-    일별 리스트를 1주일 간격으로 집계. 최근 날(오늘) 기준 역순으로 주 구간 묶음.
-    Returns: [ {"week": "01.06~01.12", "partName": "...", "price": int}, ... ]
+    일별 리스트를 1주일 간격으로 집계. 어제 날짜 기준으로 최근 N주간 데이터를 주별로 집계.
+    주는 월요일부터 일요일까지로 계산하며, 각 주의 평균 가격을 계산합니다.
+    Returns: [ {"week": "01.29~02.04", "partName": "...", "price": int}, ... ]
     """
     if not daily:
         return []
-    # (week_label, week_end_date) -> list of prices (주 끝 날짜로 정렬)
-    by_week: dict[tuple[str, datetime], list[int]] = defaultdict(list)
+    
+    # 어제 날짜 기준 (KAMIS API는 어제 날짜까지만 데이터 제공)
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    
+    # 실제 데이터 날짜 파싱 및 어제 이후 날짜 필터링
+    valid_points = []
     for point in daily:
         d = point.get("date", "")
         if len(d) < 10:
             continue
         try:
             dt_obj = datetime.strptime(d[:10], "%Y-%m-%d").date()
-            week_start = dt_obj - timedelta(days=dt_obj.weekday())
-            week_end = week_start + timedelta(days=6)
-            week_label = f"{week_start.month:02d}.{week_start.day:02d}~{week_end.month:02d}.{week_end.day:02d}"
-            week_end_dt = datetime.combine(week_end, datetime.min.time())
-            by_week[(week_label, week_end_dt)].append(point.get("price", 0))
+            # 어제 날짜를 넘어가는 데이터는 제외
+            if dt_obj > yesterday:
+                continue
+            price = point.get("price", 0)
+            if price > 0:
+                valid_points.append((dt_obj, price))
         except (ValueError, TypeError):
             continue
+    
+    if not valid_points:
+        return []
+    
+    # 주별로 그룹화: (주 시작일, 주 끝일) -> [가격들]
+    # 주는 월요일(0)부터 일요일(6)까지
+    by_week: dict[tuple[date, date], list[int]] = defaultdict(list)
+    
+    for dt_obj, price in valid_points:
+        # 주 시작일 계산 (월요일 기준)
+        days_since_monday = dt_obj.weekday()
+        week_start = dt_obj - timedelta(days=days_since_monday)
+        # 주 끝일 계산 (일요일)
+        week_end = week_start + timedelta(days=6)
+        # 어제 날짜를 넘지 않도록 주 끝일 제한
+        week_end = min(week_end, yesterday)
+        
+        by_week[(week_start, week_end)].append(price)
+    
+    # 주별 평균 가격 계산 및 주 라벨 생성
+    # 주 시작일 기준으로 정렬 (오름차순: 오래된 주가 먼저)
     result = []
-    for (week_label, _), prices in sorted(by_week.items(), key=lambda x: x[0][1]):
+    for (week_start, week_end), prices in sorted(by_week.items(), key=lambda x: (x[0][0], x[0][1])):  # 주 시작일, 끝일 기준 오름차순
         if prices:
+            avg_price = int(sum(prices) / len(prices))
+            # 주 라벨 생성: "MM.DD~MM.DD" 형식
+            # 연도가 바뀌는 경우도 고려 (예: 12.29~01.04)
+            week_label = f"{week_start.month:02d}.{week_start.day:02d}~{week_end.month:02d}.{week_end.day:02d}"
             result.append({
                 "week": week_label,
                 "partName": part_name,
-                "price": int(sum(prices) / len(prices)),
+                "price": avg_price,
             })
+    
+    # 날짜 순서대로 정렬되어 반환됨
     return result
-
-
-@router.get(
-    "/prices/history/check",
-    summary="시세 API 연결 확인",
-)
-async def get_price_history_connection_check():
-    """
-    KAMIS 시세 API 연결 여부 확인.
-    Returns: { "connected": true/false, "message": "..." }
-    """
-    return await check_kamis_monthly_trend_connection()
 
 
 @router.get(
@@ -282,14 +304,21 @@ async def get_dashboard_price_history(
                 grade_code=grade_code,
                 weeks=weeks,
             )
-            for pt in _aggregate_daily_by_week(daily, name):
+            logger.info(f"소 주별 시세 조회 성공 ({name}): {len(daily)}개 일별 데이터")
+            if not daily:
+                logger.warning(f"소 주별 시세 데이터 없음 ({name})")
+                continue
+            aggregated = _aggregate_daily_by_week(daily, name)
+            logger.info(f"소 주별 시세 집계 완료 ({name}): {len(aggregated)}개 주 데이터")
+            for pt in aggregated:
                 beef_history.append(
                     PriceHistoryPoint(week=pt["week"], partName=pt["partName"], price=pt["price"])
                 )
-        except HTTPException:
+        except HTTPException as e:
+            logger.error(f"소 주별 시세 HTTP 에러 ({name}): {e.status_code} - {e.detail}")
             raise
         except Exception as e:
-            logger.warning("소 주별 시세 조회 실패 (%s): %s", name, e)
+            logger.error(f"소 주별 시세 조회 실패 ({name}): {e}", exc_info=True)
 
     for code, name in pork_parts:
         try:
@@ -299,14 +328,21 @@ async def get_dashboard_price_history(
                 grade_code=grade_code,
                 weeks=weeks,
             )
-            for pt in _aggregate_daily_by_week(daily, name):
+            logger.info(f"돼지 주별 시세 조회 성공 ({name}): {len(daily)}개 일별 데이터")
+            if not daily:
+                logger.warning(f"돼지 주별 시세 데이터 없음 ({name})")
+                continue
+            aggregated = _aggregate_daily_by_week(daily, name)
+            logger.info(f"돼지 주별 시세 집계 완료 ({name}): {len(aggregated)}개 주 데이터")
+            for pt in aggregated:
                 pork_history.append(
                     PriceHistoryPoint(week=pt["week"], partName=pt["partName"], price=pt["price"])
                 )
-        except HTTPException:
+        except HTTPException as e:
+            logger.error(f"돼지 주별 시세 HTTP 에러 ({name}): {e.status_code} - {e.detail}")
             raise
         except Exception as e:
-            logger.warning("돼지 주별 시세 조회 실패 (%s): %s", name, e)
+            logger.error(f"돼지 주별 시세 조회 실패 ({name}): {e}", exc_info=True)
 
     return PriceHistoryResponse(beef=beef_history, pork=pork_history)
 
@@ -405,3 +441,53 @@ async def get_popular_cuts(
         logger.warning("인기 부위 데이터 없음 (최근 7일간 인식 로그 없음)")
     
     return PopularCutsResponse(items=items)
+
+
+@router.get(
+    "/prices/history/check",
+    summary="주별 가격 이력 API 연결 확인",
+)
+async def get_dashboard_price_history_check():
+    """
+    KAMIS API 연결 상태 확인 (주별 가격 이력용).
+    실제 API 호출을 통해 연결 가능 여부를 확인합니다.
+    """
+    from ..apis import fetch_kamis_price_period, settings
+    
+    key = (settings.kamis_api_key or "").strip()
+    if not key:
+        return {
+            "connected": False,
+            "message": "KAMIS API 키가 설정되지 않았습니다.",
+        }
+    
+    # 실제 API 호출로 연결 확인 (소/등심으로 테스트)
+    try:
+        test_data = await fetch_kamis_price_period(
+            part_name="Beef_Ribeye",
+            region="전국",
+            grade_code="00",
+            weeks=1,  # 최소한의 데이터만 요청
+        )
+        if test_data:
+            return {
+                "connected": True,
+                "message": "KAMIS API 연결 성공",
+            }
+        else:
+            return {
+                "connected": False,
+                "message": "KAMIS API 응답 데이터 없음",
+            }
+    except HTTPException as e:
+        logger.warning(f"KAMIS API 연결 확인 실패: {e.status_code} - {e.detail}")
+        return {
+            "connected": False,
+            "message": f"KAMIS API 연결 실패: {e.detail}",
+        }
+    except Exception as e:
+        logger.warning(f"KAMIS API 연결 확인 실패: {e}", exc_info=True)
+        return {
+            "connected": False,
+            "message": f"KAMIS API 연결 실패: {str(e)}",
+        }
