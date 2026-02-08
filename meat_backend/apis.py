@@ -106,9 +106,8 @@ KAMIS_MAP: dict[str, dict[str, Any]] = {
     "돼지삼겹살": {"item": "4304", "kind": "27", "ranks": {"일반": "00"}},
     "돼지갈비": {"item": "4304", "kind": "28", "ranks": {"일반": "00"}},
     "돼지목심": {"item": "4304", "kind": "68", "ranks": {"일반": "00"}},
-    "수입소양지_미국": {"item": "4401", "kind": "29", "ranks": {"냉장": "81"}},
-    "수입소양지_호주": {"item": "4401", "kind": "29", "ranks": {"냉장": "82"}},
-    "수입소갈비": {"item": "4401", "kind": "31", "ranks": {"일반": "00", "미국": "81", "호주": "82"}},
+    "수입소갈비": {"item": "4401", "kind": "31", "ranks": {"미국": "81", "호주": "82"}},
+    "수입소갈비살": {"item": "4401", "kind": "37", "ranks": {"미국": "81", "호주": "82"}},
     "수입돼지삼겹살": {"item": "4402", "kind": "27", "ranks": {"일반": "00"}},
 }
 
@@ -261,31 +260,7 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "grades": ["일반"],
         "grade_codes": {"00": "전체"},
     },
-    # 수입 소고기 - itemcode 4401
-    "Import_Beef_Brisket_US": {
-        "itemcode": "4401",
-        "kindcode": "29",
-        "category": "500",
-        "food_nm": "수입 소고기/양지(냉장)",
-        "grades": ["미국산"],
-        "grade_codes": {"81": "미국산"},
-    },
-    "Import_Beef_Brisket_AU": {
-        "itemcode": "4401",
-        "kindcode": "29",
-        "category": "500",
-        "food_nm": "수입 소고기/양지(냉장)",
-        "grades": ["호주산"],
-        "grade_codes": {"82": "호주산"},
-    },
-    "Import_Beef_Rib": {
-        "itemcode": "4401",
-        "kindcode": "31",
-        "category": "500",
-        "food_nm": "수입 소고기/갈비",
-        "grades": ["전체", "미국산", "호주산"],
-        "grade_codes": {"00": "전체", "81": "미국산", "82": "호주산"},
-    },
+    # 수입 소고기 - itemcode 4401 (갈비, 갈비살만 유지 - 호주산/미국산만)
     "Import_Beef_Rib_US": {
         "itemcode": "4401",
         "kindcode": "31",
@@ -315,38 +290,6 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "kindcode": "37",
         "category": "500",
         "food_nm": "수입 소고기/갈비살",
-        "grades": ["호주산"],
-        "grade_codes": {"82": "호주산"},
-    },
-    "Import_Beef_ChuckEye_US": {
-        "itemcode": "4401",
-        "kindcode": "62",
-        "category": "500",
-        "food_nm": "수입 소고기/척아이롤(냉장)",
-        "grades": ["미국산"],
-        "grade_codes": {"81": "미국산"},
-    },
-    "Import_Beef_ChuckEye_AU": {
-        "itemcode": "4401",
-        "kindcode": "62",
-        "category": "500",
-        "food_nm": "수입 소고기/척아이롤(냉장)",
-        "grades": ["호주산"],
-        "grade_codes": {"82": "호주산"},
-    },
-    "Import_Beef_ChuckEye_Frozen_US": {
-        "itemcode": "4401",
-        "kindcode": "68",
-        "category": "500",
-        "food_nm": "수입 소고기/척아이롤(냉동)",
-        "grades": ["미국산"],
-        "grade_codes": {"81": "미국산"},
-    },
-    "Import_Beef_ChuckEye_Frozen_AU": {
-        "itemcode": "4401",
-        "kindcode": "68",
-        "category": "500",
-        "food_nm": "수입 소고기/척아이롤(냉동)",
         "grades": ["호주산"],
         "grade_codes": {"82": "호주산"},
     },
@@ -447,12 +390,13 @@ async def fetch_kamis_price(
     grade_code: str = "00",
 ) -> dict[str, Any]:
     """
-    KAMIS API로 실시간 시세 조회 (주별 그래프 로직 기반)
+    KAMIS API로 실시간 시세 조회 (periodProductList 액션 사용)
     
     Args:
         part_name: 고기 부위명 (예: "Beef_Tenderloin", "소/안심")
         region: 지역명 (예: "서울", "전국") -> p_countrycode로 변환
-        grade_code: 등급코드 (예: "00"=전체, "01"=1++, "02"=1+, "03"=1) -> p_periodProductList로 변환
+        grade_code: 등급코드 (예: "00"=전체, "01"=1++, "02"=1+, "03"=1) -> p_productrankcode로 변환
+                   주의: "00"은 사용하지 않고 각 등급을 개별 조회
     
     Returns:
         {
@@ -465,91 +409,410 @@ async def fetch_kamis_price(
             "selectedGrade": str
         }
     """
-    # 주별 그래프 로직을 사용하여 최신 날짜의 데이터만 추출
-    # 기간 조회를 통해 최근 7일 데이터를 가져온 후, 최신 날짜의 데이터만 선택
-    period_data = await fetch_kamis_price_period(
-        part_name=part_name,
-        region=region,
-        grade_code=grade_code,
-        weeks=1,  # 최근 1주일 데이터만 조회
-    )
+    print(f"DEBUG: fetch_kamis_price 호출 | part_name={part_name} | region={region} | grade_code={grade_code}")
     
-    if not period_data:
-        target_label = _get_codes(part_name).get("food_nm") or part_name
-        raise HTTPException(
-            status_code=404,
-            detail=f"{target_label} 실시간 데이터를 알 수 없습니다.",
-        )
-    
-    # 최신 날짜의 데이터 선택 (주별 그래프 로직에서 이미 최신 날짜만 반환됨)
-    # period_data는 날짜 순으로 정렬되어 있으므로 마지막 항목이 최신
-    latest_item = period_data[-1] if period_data else None
-    
-    if not latest_item:
-        target_label = _get_codes(part_name).get("food_nm") or part_name
-        raise HTTPException(
-            status_code=404,
-            detail=f"{target_label} 실시간 데이터를 알 수 없습니다.",
-        )
-    
-    # 등급별 가격 정보 생성 (전체 등급일 경우)
+    key = (settings.kamis_api_key or "").strip()
+    cert_id = (settings.kamis_cert_id or "pak101044").strip()
+    if not key:
+        raise HTTPException(status_code=503, detail="KAMIS API 키가 설정되지 않았습니다.")
+
+    base = (settings.kamis_api_url or "https://www.kamis.or.kr/service/price/xml.do").strip()
+    today = date.today()
+    # API는 어제 날짜까지만 데이터가 있으므로 어제 날짜를 사용
+    yesterday = today - timedelta(days=1)
+    target_day = yesterday.strftime("%Y-%m-%d")
+
     codes = _get_codes(part_name)
-    grade_prices: list[dict[str, Any]] = []
+    if (part_name not in PART_TO_CODES and codes.get("food_nm") == part_name) or not codes.get("itemcode"):
+        raise HTTPException(
+            status_code=404,
+            detail=f"{part_name} 실시간 데이터를 알 수 없습니다.",
+        )
+
+    # 지역코드 매핑
+    county_code = REGION_CODE_MAP.get(region, region)
     
-    if grade_code == "00":
-        # 전체 등급일 경우: 국내 소고기만 각 등급별로 별도 조회하여 등급별 가격 수집
-        # 수입 소고기는 등급이 없으므로 등급별 조회 불필요
-        grade_codes_to_fetch = ["01", "02", "03"] if part_name.startswith("Beef_") else []
+    # 등급코드 처리
+    is_domestic_beef = part_name.startswith("Beef_")
+    is_import_beef = part_name.startswith("Import_Beef_")
+    is_pork = part_name.startswith("Pork_") or part_name.startswith("Import_Pork_")
+    
+    print(f"DEBUG: fetch_kamis_price 분류 | is_domestic_beef={is_domestic_beef} | is_import_beef={is_import_beef} | is_pork={is_pork}")
+    
+    # 전체 등급(00) 선택 시: 국내 소고기는 각 등급을 개별 조회
+    if grade_code == "00" and is_domestic_beef:
+        grade_prices: list[dict[str, Any]] = []
+        grade_codes_to_fetch = ["01", "02", "03"]
         
         for gc in grade_codes_to_fetch:
             try:
-                grade_period = await fetch_kamis_price_period(
+                price_data = await _fetch_kamis_price_single(
                     part_name=part_name,
                     region=region,
                     grade_code=gc,
-                    weeks=1,
+                    target_day=target_day,
+                    key=key,
+                    cert_id=cert_id,
+                    base=base,
+                    codes=codes,
+                    county_code=county_code,
                 )
-                if grade_period:
-                    grade_item = grade_period[-1]
+                if price_data:
                     grade_code_map = codes.get("grade_codes", {})
                     grade_name = grade_code_map.get(gc, f"{gc}등급")
                     grade_prices.append({
                         "grade": grade_name,
-                        "price": grade_item["price"],
+                        "price": price_data["price"],
                         "unit": "100g",
-                        "priceDate": grade_item["date"],
+                        "priceDate": price_data["date"],
                         "trend": "flat",
                     })
-            except Exception:
+            except Exception as e:
+                logger.warning(f"등급 {gc} 조회 실패: {e}")
                 continue
         
+        if not grade_prices:
+            target_label = codes.get("food_nm") or part_name
+            raise HTTPException(
+                status_code=404,
+                detail=f"{target_label} 실시간 데이터를 알 수 없습니다.",
+            )
+        
         # 전체 평균 계산
-        if grade_prices:
-            avg_price = sum(gp["price"] for gp in grade_prices) / len(grade_prices)
-            primary_price = int(avg_price)
-        else:
-            primary_price = latest_item["price"]
-    else:
-        # 특정 등급: 현재 조회 결과 사용
-        grade_code_map = codes.get("grade_codes", {})
-        grade_name = grade_code_map.get(grade_code, "일반")
-        grade_prices = [{
-            "grade": grade_name,
-            "price": latest_item["price"],
+        avg_price = sum(gp["price"] for gp in grade_prices) / len(grade_prices)
+        primary_price = int(avg_price)
+        latest_date = grade_prices[0]["priceDate"]
+        
+        return {
+            "currentPrice": primary_price,
             "unit": "100g",
-            "priceDate": latest_item["date"],
             "trend": "flat",
-        }]
-        primary_price = latest_item["price"]
+            "price_date": latest_date,
+            "source": "api",
+            "gradePrices": grade_prices,
+            "selectedGrade": "전체",
+        }
+    else:
+        # 특정 등급 선택 또는 돼지/수입 소고기
+        # 돼지나 수입 소고기는 등급이 없으므로 grade_code를 무시
+        if is_pork:
+            # 돼지(국내/수입): 등급 없음 - 빈 문자열 (00의 의미는 빈 문자열)
+            product_rank_code = ""
+        elif is_import_beef:
+            # 수입 소고기: part_name에 원산지 정보가 있으면 사용
+            if "_US" in part_name:
+                product_rank_code = "81"  # 미국산
+            elif "_AU" in part_name:
+                product_rank_code = "82"  # 호주산
+            else:
+                # 전체 선택 시: 빈 문자열 (00의 의미는 빈 문자열)
+                product_rank_code = ""
+        else:
+            # 국내 소고기: 특정 등급만 사용 (00은 위에서 처리됨)
+            product_rank_code = grade_code if grade_code != "00" else ""
+        
+        print(f"DEBUG: fetch_kamis_price | 수입 소고기/돼지 처리 | part_name={part_name} | product_rank_code={product_rank_code}")
+        
+        price_data = await _fetch_kamis_price_single(
+            part_name=part_name,
+            region=region,
+            grade_code=grade_code,
+            target_day=target_day,
+            key=key,
+            cert_id=cert_id,
+            base=base,
+            codes=codes,
+            county_code=county_code,
+            product_rank_code=product_rank_code,
+        )
+        
+        print(f"DEBUG: fetch_kamis_price | price_data 결과 | part_name={part_name} | price_data={price_data}")
+        
+        if not price_data:
+            target_label = codes.get("food_nm") or part_name
+            print(f"DEBUG: ⚠️ fetch_kamis_price | price_data 없음 | part_name={part_name} | region={region} | product_rank_code={product_rank_code}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"{target_label} 실시간 데이터를 알 수 없습니다.",
+            )
+        
+        grade_code_map = codes.get("grade_codes", {})
+        # 수입 소고기: 원산지 이름 사용
+        if is_import_beef:
+            if "_US" in part_name:
+                grade_name = "미국산"
+            elif "_AU" in part_name:
+                grade_name = "호주산"
+            else:
+                grade_name = "전체"
+        else:
+            grade_name = grade_code_map.get(grade_code, "일반") if grade_code != "00" else "전체"
+        
+        result = {
+            "currentPrice": price_data["price"],
+            "unit": "100g",
+            "trend": "flat",
+            "price_date": price_data["date"],
+            "source": "api",
+            "gradePrices": [{
+                "grade": grade_name,
+                "price": price_data["price"],
+                "unit": "100g",
+                "priceDate": price_data["date"],
+                "trend": "flat",
+            }],
+            "selectedGrade": grade_name,
+        }
+        
+        print(f"DEBUG: fetch_kamis_price | 최종 반환값 | part_name={part_name} | currentPrice={result['currentPrice']} | price_date={result['price_date']}")
+        
+        return result
+
+
+async def _fetch_kamis_price_single(
+    part_name: str,
+    region: str,
+    grade_code: str,
+    target_day: str,
+    key: str,
+    cert_id: str,
+    base: str,
+    codes: dict[str, Any],
+    county_code: str,
+    product_rank_code: str | None = None,
+) -> dict[str, Any] | None:
+    """
+    KAMIS API로 단일 등급의 실시간 가격 조회 (periodProductList 액션 사용)
+    
+    Args:
+        product_rank_code: None이면 grade_code에서 자동 계산
+    """
+    # product_rank_code가 None이면 grade_code에서 계산
+    is_domestic_beef = part_name.startswith("Beef_")
+    is_import_beef = part_name.startswith("Import_Beef_")
+    is_pork = part_name.startswith("Pork_") or part_name.startswith("Import_Pork_")
+    
+    if product_rank_code is None:
+        if is_pork:
+            # 돼지(국내/수입): 등급 없음 - 빈 문자열 (00의 의미는 빈 문자열)
+            product_rank_code = ""
+        elif is_import_beef:
+            # 수입 소고기: part_name에 원산지 정보가 있으면 사용, 없으면 빈 문자열
+            if "_US" in part_name:
+                product_rank_code = "81"  # 미국산
+            elif "_AU" in part_name:
+                product_rank_code = "82"  # 호주산
+            else:
+                # 전체 선택 시: 빈 문자열 (00의 의미는 빈 문자열)
+                product_rank_code = ""
+        elif is_domestic_beef:
+            # 국내 소고기: 00은 사용하지 않음 (이미 위에서 처리됨)
+            product_rank_code = grade_code if grade_code != "00" else ""
+        else:
+            product_rank_code = ""
+    
+    # 수입 소고기는 periodRetailProductList 액션 사용, 나머지는 periodProductList 사용
+    if is_import_beef:
+        # 수입 소고기: periodRetailProductList 액션 사용
+        params = {
+            "action": "periodRetailProductList",
+            "p_startday": target_day,
+            "p_endday": target_day,
+            "p_itemcategorycode": codes.get("category", "500"),
+            "p_itemcode": codes.get("itemcode", ""),
+            "p_kindcode": codes.get("kindcode", ""),
+            "p_productrankcode": product_rank_code,  # 원산지 코드 (81=미국산, 82=호주산)
+            "p_countrycode": county_code,
+            "p_convert_kg_yn": "N",
+            "p_cert_key": key,
+            "p_cert_id": cert_id,
+            "p_returntype": "xml",
+        }
+    else:
+        # 국내 소고기/돼지: periodProductList 액션 사용
+        params = {
+            "action": "periodProductList",
+            "p_productclscode": "01",  # 필수 파라미터
+            "p_startday": target_day,
+            "p_endday": target_day,
+            "p_itemcategorycode": codes.get("category", "500"),
+            "p_itemcode": codes.get("itemcode", ""),
+            "p_kindcode": codes.get("kindcode", ""),
+            "p_productrankcode": product_rank_code,  # 등급코드 (00 제외)
+            "p_countrycode": county_code,
+            "p_convert_kg_yn": "N",
+            "p_cert_key": key,
+            "p_cert_id": cert_id,
+            "p_returntype": "xml",
+        }
+    
+    print(f"DEBUG: _fetch_kamis_price_single | part_name={part_name} | region={region} | grade_code={grade_code} | product_rank_code={product_rank_code} | is_import_beef={is_import_beef}")
+    print(f"DEBUG: API PARAMS | action={params['action']} | itemcode={params['p_itemcode']} | kindcode={params['p_kindcode']} | p_productrankcode={params.get('p_productrankcode', 'N/A')} | countrycode={params['p_countrycode']}")
+    
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            req = client.build_request("GET", base, params=params)
+            print(f"DEBUG: KAMIS API 요청 URL (실시간): {req.url}")
+            resp = await client.send(req)
+            resp.raise_for_status()
+            payload = resp.text
+            print(f"DEBUG: KAMIS API 응답 길이 (실시간): {len(payload)} bytes")
+            if len(payload) > 1000:
+                print(f"DEBUG: KAMIS API 응답 미리보기 (실시간): {payload[:1000]}...")
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(status_code=503, detail=f"KAMIS API 연결 실패: HTTP {exc.response.status_code}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"KAMIS API 연결 실패: {exc}") from exc
+
+    parsed = _parse_response(payload, "KAMIS")
+    
+    # 응답 파싱 (여러 경로 시도)
+    items: list[dict[str, Any]] = []
+    
+    # 경로 1: document.data.item
+    if "document" in parsed:
+        document = parsed.get("document", {}) or {}
+        data = document.get("data", {})
+        if isinstance(data, dict):
+            error_code = str(data.get("error_code", "000"))
+            print(f"DEBUG: _fetch_kamis_price_single | error_code={error_code} | part_name={part_name} | product_rank_code={product_rank_code}")
+            if error_code in ("0", "000"):
+                items = _ensure_list(data.get("item"))
+    
+    # 경로 2: data.item (document 없이 직접)
+    if not items and "data" in parsed:
+        data = parsed.get("data", {})
+        if isinstance(data, dict):
+            error_code = str(data.get("error_code", "000"))
+            if error_code in ("0", "000"):
+                items = _ensure_list(data.get("item"))
+    
+    # 경로 3: 최상위 item
+    if not items and isinstance(parsed, dict) and "item" in parsed:
+        items = _ensure_list(parsed.get("item"))
+    
+    print(f"DEBUG: _fetch_kamis_price_single 파싱 결과 | items 수={len(items)} | part_name={part_name} | product_rank_code={product_rank_code}")
+    if items:
+        for idx, item in enumerate(items[:5], 1):
+            if isinstance(item, dict):
+                print(f"DEBUG: Item[{idx}] | countyname={item.get('countyname', 'N/A')} | price={item.get('price', 'N/A')} | itemname={item.get('itemname', 'N/A')} | kindname={item.get('kindname', 'N/A')} | regday={item.get('regday', 'N/A')}")
+    else:
+        print(f"DEBUG: ⚠️ _fetch_kamis_price_single items 없음 | part_name={part_name} | product_rank_code={product_rank_code}")
+        print(f"DEBUG: 파싱된 전체 구조: {list(parsed.keys()) if isinstance(parsed, dict) else type(parsed)}")
+        if isinstance(parsed, dict) and "document" in parsed:
+            doc = parsed.get("document", {})
+            print(f"DEBUG: document 키: {list(doc.keys()) if isinstance(doc, dict) else type(doc)}")
+            if isinstance(doc, dict) and "data" in doc:
+                data = doc.get("data", {})
+                print(f"DEBUG: data 키: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+                if isinstance(data, dict):
+                    print(f"DEBUG: error_code: {data.get('error_code', 'N/A')}")
+    
+    if not items:
+        return None
+    
+    # 가장 최신 항목 선택 (countyname 우선순위: 특정 지역 > 평균)
+    best_item = None
+    best_priority = 999
+    
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        
+        countyname = str(item.get("countyname", "")).strip()
+        
+        # 지역 필터링
+        if region == "전국":
+            # 전국 선택 시: 평균 데이터 사용
+            if countyname not in ("평균", "평년", ""):
+                continue
+        elif region == "온라인":
+            # 온라인은 시장명으로 필터링 (별도 처리 필요)
+            marketname = str(item.get("marketname", "")).strip()
+            if "온라인" not in marketname and "옥션" not in marketname:
+                continue
+        else:
+            # 특정 지역 선택 시: 해당 지역명 또는 평균 데이터 사용
+            if countyname not in ("평균", "평년", "") and countyname != region:
+                continue
+        
+        # 우선순위: 특정 지역(1) > 평균(2)
+        priority = 2 if countyname in ("평균", "평년", "") else 1
+        
+        if priority < best_priority:
+            best_priority = priority
+            best_item = item
+    
+    if not best_item:
+        print(f"DEBUG: ⚠️ _fetch_kamis_price_single best_item 없음 | region={region} | items 수={len(items)}")
+        return None
+    
+    # 가격 추출
+    raw_price = (
+        best_item.get("price")
+        or best_item.get("dpr1")
+        or best_item.get("dpr0")
+        or best_item.get("avgPrc")
+        or best_item.get("value")
+        or best_item.get("priceValue")
+    )
+    
+    try:
+        price_value = int(float(str(raw_price).replace(",", "")))
+    except (TypeError, ValueError):
+        return None
+    
+    if price_value <= 0:
+        return None
+    
+    # 날짜 추출 - target_day를 기준으로 올바른 연도 결정
+    yyyy = str(best_item.get("yyyy", "")).strip()
+    regday_raw = best_item.get("regday") or ""
+    
+    if not regday_raw or not isinstance(regday_raw, str):
+        return None
+    
+    regday_str = str(regday_raw).strip()
+    regday = None
+    
+    # target_day에서 연도 추출 (기본값으로 사용)
+    target_year = target_day[:4] if target_day and len(target_day) >= 4 else None
+    
+    if "/" in regday_str:
+        parts = regday_str.split("/")
+        if len(parts) == 2:
+            # MM/DD 형식: target_day의 연도 사용
+            if target_year:
+                regday = f"{target_year}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
+            elif yyyy:
+                regday = f"{yyyy}-{parts[0].zfill(2)}-{parts[1].zfill(2)}"
+        elif len(parts) == 3:
+            # YYYY/MM/DD 형식
+            regday = "-".join(parts)
+    elif len(regday_str) == 8 and regday_str.isdigit():
+        regday = f"{regday_str[:4]}-{regday_str[4:6]}-{regday_str[6:8]}"
+    elif "-" in regday_str and len(regday_str) >= 10:
+        regday = regday_str[:10]
+    
+    if not regday or len(regday) < 10:
+        # 날짜 파싱 실패 시 target_day 사용
+        regday = target_day
+    else:
+        # 날짜가 target_day보다 오래된 경우 target_day 사용 (최신 데이터 보장)
+        try:
+            parsed_date = datetime.strptime(regday, "%Y-%m-%d").date()
+            target_date = datetime.strptime(target_day, "%Y-%m-%d").date()
+            # 날짜가 target_day보다 오래되었거나, target_day와 같은 경우 target_day 사용
+            if parsed_date <= target_date:
+                regday = target_day
+        except (ValueError, TypeError):
+            regday = target_day
+    
+    print(f"DEBUG: _fetch_kamis_price_single 날짜 파싱 | regday={regday} | target_day={target_day} | yyyy={yyyy} | regday_raw={regday_raw}")
     
     return {
-        "currentPrice": primary_price,
-        "unit": "100g",
-        "trend": "flat",
-        "price_date": latest_item["date"],
-        "source": "api",
-        "gradePrices": grade_prices,
-        "selectedGrade": grade_prices[0]["grade"] if grade_prices else "일반",
+        "price": price_value,
+        "date": regday,
     }
 
 
