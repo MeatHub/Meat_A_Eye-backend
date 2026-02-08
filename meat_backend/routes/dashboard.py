@@ -71,8 +71,26 @@ async def get_dashboard_prices(
         - pork_part만 지정되면: 해당 돼지고기 부위만 조회, 소고기는 조회하지 않음
     """
     # 기본 부위 목록 (테이블 구조에 맞춤: 품목명/품종명 형식)
+    # 주의: 프론트엔드에서 카테고리별로 올바른 부위를 전달하므로, 
+    # 여기서는 특정 부위가 지정되지 않았을 때만 사용됨 (실제로는 사용되지 않음)
     default_beef_parts = [("Beef_Ribeye", "소/등심"), ("Beef_Rib", "소/갈비")]
-    default_pork_parts = [("Pork_Belly", "돼지/삼겹살"), ("Pork_Loin", "돼지/목심")]
+    default_pork_parts = [
+        ("Pork_Shoulder", "돼지/앞다리"),
+        ("Pork_Belly", "돼지/삼겹살"),
+        ("Pork_Rib", "돼지/갈비"),
+        ("Pork_Loin", "돼지/목심"),
+    ]
+    
+    # 수입 소고기 기본 부위 목록 (갈비, 갈비살 - 미국산/호주산)
+    default_import_beef_parts = [
+        ("Import_Beef_Rib_US", "수입 소고기/갈비 - 미국산"),
+        ("Import_Beef_Rib_AU", "수입 소고기/갈비 - 호주산"),
+        ("Import_Beef_Ribeye_US", "수입 소고기/갈비살 - 미국산"),
+        ("Import_Beef_Ribeye_AU", "수입 소고기/갈비살 - 호주산"),
+    ]
+    
+    # 수입 돼지고기 기본 부위 목록 (삼겹살만)
+    default_import_pork_parts = [("Import_Pork_Belly", "수입 돼지고기/삼겹살")]
     
     # 부위 필터 적용 - 부위 코드와 이름 매핑 (테이블 구조에 맞춤)
     # 품목명/품종명 구조: 소/안심, 소/등심, 소/설도, 소/양지, 소/갈비
@@ -84,18 +102,11 @@ async def get_dashboard_prices(
         "Beef_BottomRound": "소/설도",  # itemcode 4301, kindcode 36
         "Beef_Brisket": "소/양지",     # itemcode 4301, kindcode 40
         "Beef_Rib": "소/갈비",         # itemcode 4301, kindcode 50
-        # 수입 소고기
-        "Import_Beef_Brisket_US": "수입 소고기/양지(냉장) - 미국산",  # itemcode 4401, kindcode 29, 등급 81
-        "Import_Beef_Brisket_AU": "수입 소고기/양지(냉장) - 호주산",  # itemcode 4401, kindcode 29, 등급 82
-        "Import_Beef_Rib": "수입 소고기/갈비",  # itemcode 4401, kindcode 31
+        # 수입 소고기 (갈비, 갈비살만 유지 - 호주산/미국산만)
         "Import_Beef_Rib_US": "수입 소고기/갈비 - 미국산",  # itemcode 4401, kindcode 31, 등급 81
         "Import_Beef_Rib_AU": "수입 소고기/갈비 - 호주산",  # itemcode 4401, kindcode 31, 등급 82
         "Import_Beef_Ribeye_US": "수입 소고기/갈비살 - 미국산",  # itemcode 4401, kindcode 37, 등급 81
         "Import_Beef_Ribeye_AU": "수입 소고기/갈비살 - 호주산",  # itemcode 4401, kindcode 37, 등급 82
-        "Import_Beef_ChuckEye_US": "수입 소고기/척아이롤(냉장) - 미국산",  # itemcode 4401, kindcode 62, 등급 81
-        "Import_Beef_ChuckEye_AU": "수입 소고기/척아이롤(냉장) - 호주산",  # itemcode 4401, kindcode 62, 등급 82
-        "Import_Beef_ChuckEye_Frozen_US": "수입 소고기/척아이롤(냉동) - 미국산",  # itemcode 4401, kindcode 68, 등급 81
-        "Import_Beef_ChuckEye_Frozen_AU": "수입 소고기/척아이롤(냉동) - 호주산",  # itemcode 4401, kindcode 68, 등급 82
     }
     pork_part_map = {
         "Pork_Shoulder": "돼지/앞다리",  # itemcode 4304, kindcode 25
@@ -116,9 +127,13 @@ async def get_dashboard_prices(
         # 특정 소고기 부위 선택 (국내 또는 수입)
         beef_parts = [(beef_part, beef_part_map[beef_part])]
     elif beef_part is None:
-        # beef_part가 None이고 pork_part도 None이면 기본 부위 목록 사용 (전체 선택)
+        # beef_part가 None일 때: 수입 소고기인지 확인
+        # 수입 소고기는 part_name이 "Import_Beef_"로 시작하는 경우
+        # 하지만 현재 API는 part_name을 받지 않으므로, beef_part가 None이고
+        # pork_part도 None이면 기본 부위 목록 사용 (국내 소고기)
         # pork_part가 지정되어 있으면 소고기는 조회하지 않음
         if pork_part is None:
+            # beef_part와 pork_part가 모두 None이면 국내 소고기 기본 부위 사용
             beef_parts = default_beef_parts
         else:
             beef_parts = []  # 돼지고기만 선택된 경우 소고기는 조회하지 않음
@@ -131,9 +146,13 @@ async def get_dashboard_prices(
         # 특정 돼지고기 부위 선택 (국내 또는 수입)
         pork_parts = [(pork_part, pork_part_map[pork_part])]
     elif pork_part is None:
-        # pork_part가 None이고 beef_part도 None이면 기본 부위 목록 사용 (전체 선택)
+        # pork_part가 None일 때: 수입 돼지고기인지 확인
+        # 수입 돼지고기는 part_name이 "Import_Pork_"로 시작하는 경우
+        # 하지만 현재 API는 part_name을 받지 않으므로, pork_part가 None이고
+        # beef_part도 None이면 기본 부위 목록 사용 (국내 돼지고기)
         # beef_part가 지정되어 있으면 돼지고기는 조회하지 않음
         if beef_part is None:
+            # beef_part와 pork_part가 모두 None이면 국내 돼지고기 기본 부위 사용
             pork_parts = default_pork_parts
         else:
             pork_parts = []  # 소고기만 선택된 경우 돼지고기는 조회하지 않음
