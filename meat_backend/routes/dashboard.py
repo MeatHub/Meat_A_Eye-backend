@@ -1,4 +1,5 @@
 """대시보드 API - 실시간 인기 부위, 통계 등."""
+import asyncio
 import logging
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -163,45 +164,64 @@ async def get_dashboard_prices(
     beef_items: List[PriceItem] = []
     pork_items: List[PriceItem] = []
 
-    for code, name in beef_parts:
+    async def _fetch_beef(code: str, name: str):
         try:
             data = await price_service.fetch_current_price(
                 part_name=code, region=region, grade_code=grade_code, db=db
             )
             if data.get("currentPrice", 0) > 0:
-                beef_items.append(
-                    PriceItem(
-                        partName=name or code,
-                        category="beef",
-                        currentPrice=data["currentPrice"],
-                        unit=data.get("unit", "100g"),
-                        priceDate=data.get("price_date"),
-                    )
-                )
+                return (code, name, data)
         except HTTPException as e:
             logger.warning("소 가격 조회 실패 (%s): HTTP %s - %s", name or code, e.status_code, e.detail)
         except Exception as e:
             logger.warning("소 가격 조회 실패 (%s): %s", name or code, e, exc_info=True)
+        return (code, name, None)
 
-    for code, name in pork_parts:
+    async def _fetch_pork(code: str, name: str):
         try:
             data = await price_service.fetch_current_price(
                 part_name=code, region=region, grade_code=grade_code, db=db
             )
             if data.get("currentPrice", 0) > 0:
-                pork_items.append(
-                    PriceItem(
-                        partName=name or code,
-                        category="pork",
-                        currentPrice=data["currentPrice"],
-                        unit=data.get("unit", "100g"),
-                        priceDate=data.get("price_date"),
-                    )
-                )
+                return (code, name, data)
         except HTTPException as e:
             logger.warning("돼지 가격 조회 실패 (%s): HTTP %s - %s", name or code, e.status_code, e.detail)
         except Exception as e:
             logger.warning("돼지 가격 조회 실패 (%s): %s", name or code, e, exc_info=True)
+        return (code, name, None)
+
+    beef_results = await asyncio.gather(
+        *[_fetch_beef(code, name) for code, name in beef_parts],
+        return_exceptions=False,
+    )
+    pork_results = await asyncio.gather(
+        *[_fetch_pork(code, name) for code, name in pork_parts],
+        return_exceptions=False,
+    )
+
+    for _code, _name, data in beef_results:
+        if data:
+            beef_items.append(
+                PriceItem(
+                    partName=_name or _code,
+                    category="beef",
+                    currentPrice=data["currentPrice"],
+                    unit=data.get("unit", "100g"),
+                    priceDate=data.get("price_date"),
+                )
+            )
+
+    for _code, _name, data in pork_results:
+        if data:
+            pork_items.append(
+                PriceItem(
+                    partName=_name or _code,
+                    category="pork",
+                    currentPrice=data["currentPrice"],
+                    unit=data.get("unit", "100g"),
+                    priceDate=data.get("price_date"),
+                )
+            )
 
     return DashboardPricesResponse(beef=beef_items, pork=pork_items)
 

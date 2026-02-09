@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections import defaultdict
@@ -409,8 +410,8 @@ async def fetch_kamis_price(
             "selectedGrade": str
         }
     """
-    print(f"DEBUG: fetch_kamis_price 호출 | part_name={part_name} | region={region} | grade_code={grade_code}")
-    
+    logger.debug("fetch_kamis_price 호출 | part_name=%s | region=%s | grade_code=%s", part_name, region, grade_code)
+
     key = (settings.kamis_api_key or "").strip()
     cert_id = (settings.kamis_cert_id or "pak101044").strip()
     if not key:
@@ -437,16 +438,18 @@ async def fetch_kamis_price(
     is_import_beef = part_name.startswith("Import_Beef_")
     is_pork = part_name.startswith("Pork_") or part_name.startswith("Import_Pork_")
     
-    print(f"DEBUG: fetch_kamis_price 분류 | is_domestic_beef={is_domestic_beef} | is_import_beef={is_import_beef} | is_pork={is_pork}")
-    
-    # 전체 등급(00) 선택 시: 국내 소고기는 각 등급을 개별 조회
+    logger.debug(
+        "fetch_kamis_price 분류 | is_domestic_beef=%s | is_import_beef=%s | is_pork=%s",
+        is_domestic_beef, is_import_beef, is_pork,
+    )
+
+    # 전체 등급(00) 선택 시: 국내 소고기는 각 등급을 병렬 조회
     if grade_code == "00" and is_domestic_beef:
-        grade_prices: list[dict[str, Any]] = []
         grade_codes_to_fetch = ["01", "02", "03"]
-        
-        for gc in grade_codes_to_fetch:
+
+        async def _fetch_one_grade(gc: str):
             try:
-                price_data = await _fetch_kamis_price_single(
+                return await _fetch_kamis_price_single(
                     part_name=part_name,
                     region=region,
                     grade_code=gc,
@@ -457,20 +460,28 @@ async def fetch_kamis_price(
                     codes=codes,
                     county_code=county_code,
                 )
-                if price_data:
-                    grade_code_map = codes.get("grade_codes", {})
-                    grade_name = grade_code_map.get(gc, f"{gc}등급")
-                    grade_prices.append({
-                        "grade": grade_name,
-                        "price": price_data["price"],
-                        "unit": "100g",
-                        "priceDate": price_data["date"],
-                        "trend": "flat",
-                    })
             except Exception as e:
-                logger.warning(f"등급 {gc} 조회 실패: {e}")
-                continue
-        
+                logger.warning("등급 %s 조회 실패: %s", gc, e)
+                return None
+
+        results = await asyncio.gather(
+            *[_fetch_one_grade(gc) for gc in grade_codes_to_fetch],
+            return_exceptions=False,
+        )
+
+        grade_code_map = codes.get("grade_codes", {})
+        grade_prices: list[dict[str, Any]] = []
+        for gc, price_data in zip(grade_codes_to_fetch, results):
+            if price_data:
+                grade_name = grade_code_map.get(gc, f"{gc}등급")
+                grade_prices.append({
+                    "grade": grade_name,
+                    "price": price_data["price"],
+                    "unit": "100g",
+                    "priceDate": price_data["date"],
+                    "trend": "flat",
+                })
+
         if not grade_prices:
             target_label = codes.get("food_nm") or part_name
             raise HTTPException(
@@ -511,8 +522,11 @@ async def fetch_kamis_price(
             # 국내 소고기: 특정 등급만 사용 (00은 위에서 처리됨)
             product_rank_code = grade_code if grade_code != "00" else ""
         
-        print(f"DEBUG: fetch_kamis_price | 수입 소고기/돼지 처리 | part_name={part_name} | product_rank_code={product_rank_code}")
-        
+        logger.debug(
+            "fetch_kamis_price | 수입 소고기/돼지 처리 | part_name=%s | product_rank_code=%s",
+            part_name, product_rank_code,
+        )
+
         price_data = await _fetch_kamis_price_single(
             part_name=part_name,
             region=region,
@@ -526,11 +540,14 @@ async def fetch_kamis_price(
             product_rank_code=product_rank_code,
         )
         
-        print(f"DEBUG: fetch_kamis_price | price_data 결과 | part_name={part_name} | price_data={price_data}")
-        
+        logger.debug("fetch_kamis_price | price_data 결과 | part_name=%s | price_data=%s", part_name, price_data)
+
         if not price_data:
             target_label = codes.get("food_nm") or part_name
-            print(f"DEBUG: ⚠️ fetch_kamis_price | price_data 없음 | part_name={part_name} | region={region} | product_rank_code={product_rank_code}")
+            logger.debug(
+                "fetch_kamis_price | price_data 없음 | part_name=%s | region=%s | product_rank_code=%s",
+                part_name, region, product_rank_code,
+            )
             raise HTTPException(
                 status_code=404,
                 detail=f"{target_label} 실시간 데이터를 알 수 없습니다.",
@@ -564,8 +581,11 @@ async def fetch_kamis_price(
             "selectedGrade": grade_name,
         }
         
-        print(f"DEBUG: fetch_kamis_price | 최종 반환값 | part_name={part_name} | currentPrice={result['currentPrice']} | price_date={result['price_date']}")
-        
+        logger.debug(
+            "fetch_kamis_price | 최종 반환값 | part_name=%s | currentPrice=%s | price_date=%s",
+            part_name, result["currentPrice"], result["price_date"],
+        )
+
         return result
 
 
@@ -646,19 +666,25 @@ async def _fetch_kamis_price_single(
             "p_returntype": "xml",
         }
     
-    print(f"DEBUG: _fetch_kamis_price_single | part_name={part_name} | region={region} | grade_code={grade_code} | product_rank_code={product_rank_code} | is_import_beef={is_import_beef}")
-    print(f"DEBUG: API PARAMS | action={params['action']} | itemcode={params['p_itemcode']} | kindcode={params['p_kindcode']} | p_productrankcode={params.get('p_productrankcode', 'N/A')} | countrycode={params['p_countrycode']}")
-    
+    logger.debug(
+        "_fetch_kamis_price_single | part_name=%s | region=%s | grade_code=%s | product_rank_code=%s",
+        part_name, region, grade_code, product_rank_code,
+    )
+    logger.debug(
+        "API PARAMS | action=%s | itemcode=%s | kindcode=%s | p_productrankcode=%s",
+        params["action"], params["p_itemcode"], params["p_kindcode"], params.get("p_productrankcode", "N/A"),
+    )
+
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             req = client.build_request("GET", base, params=params)
-            print(f"DEBUG: KAMIS API 요청 URL (실시간): {req.url}")
+            logger.debug("KAMIS API 요청 URL (실시간): %s", req.url)
             resp = await client.send(req)
             resp.raise_for_status()
             payload = resp.text
-            print(f"DEBUG: KAMIS API 응답 길이 (실시간): {len(payload)} bytes")
+            logger.debug("KAMIS API 응답 길이 (실시간): %s bytes", len(payload))
             if len(payload) > 1000:
-                print(f"DEBUG: KAMIS API 응답 미리보기 (실시간): {payload[:1000]}...")
+                logger.debug("KAMIS API 응답 미리보기 (실시간): %s...", payload[:500])
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=503, detail=f"KAMIS API 연결 실패: HTTP {exc.response.status_code}") from exc
     except Exception as exc:
@@ -675,7 +701,7 @@ async def _fetch_kamis_price_single(
         data = document.get("data", {})
         if isinstance(data, dict):
             error_code = str(data.get("error_code", "000"))
-            print(f"DEBUG: _fetch_kamis_price_single | error_code={error_code} | part_name={part_name} | product_rank_code={product_rank_code}")
+            logger.debug("_fetch_kamis_price_single | error_code=%s | part_name=%s", error_code, part_name)
             if error_code in ("0", "000"):
                 items = _ensure_list(data.get("item"))
     
@@ -691,22 +717,24 @@ async def _fetch_kamis_price_single(
     if not items and isinstance(parsed, dict) and "item" in parsed:
         items = _ensure_list(parsed.get("item"))
     
-    print(f"DEBUG: _fetch_kamis_price_single 파싱 결과 | items 수={len(items)} | part_name={part_name} | product_rank_code={product_rank_code}")
+    logger.debug("_fetch_kamis_price_single 파싱 결과 | items 수=%s | part_name=%s", len(items), part_name)
     if items:
-        for idx, item in enumerate(items[:5], 1):
+        for idx, item in enumerate(items[:3], 1):
             if isinstance(item, dict):
-                print(f"DEBUG: Item[{idx}] | countyname={item.get('countyname', 'N/A')} | price={item.get('price', 'N/A')} | itemname={item.get('itemname', 'N/A')} | kindname={item.get('kindname', 'N/A')} | regday={item.get('regday', 'N/A')}")
+                logger.debug(
+                    "Item[%s] | countyname=%s | price=%s",
+                    idx, item.get("countyname", "N/A"), item.get("price", "N/A"),
+                )
     else:
-        print(f"DEBUG: ⚠️ _fetch_kamis_price_single items 없음 | part_name={part_name} | product_rank_code={product_rank_code}")
-        print(f"DEBUG: 파싱된 전체 구조: {list(parsed.keys()) if isinstance(parsed, dict) else type(parsed)}")
-        if isinstance(parsed, dict) and "document" in parsed:
-            doc = parsed.get("document", {})
-            print(f"DEBUG: document 키: {list(doc.keys()) if isinstance(doc, dict) else type(doc)}")
-            if isinstance(doc, dict) and "data" in doc:
-                data = doc.get("data", {})
-                print(f"DEBUG: data 키: {list(data.keys()) if isinstance(data, dict) else type(data)}")
-                if isinstance(data, dict):
-                    print(f"DEBUG: error_code: {data.get('error_code', 'N/A')}")
+        logger.debug("_fetch_kamis_price_single items 없음 | part_name=%s", part_name)
+        if isinstance(parsed, dict):
+            logger.debug("파싱된 전체 구조: %s", list(parsed.keys()))
+            if "document" in parsed:
+                doc = parsed.get("document", {})
+                if isinstance(doc, dict) and "data" in doc:
+                    data = doc.get("data", {})
+                    if isinstance(data, dict):
+                        logger.debug("error_code: %s", data.get("error_code", "N/A"))
     
     if not items:
         return None
@@ -744,7 +772,7 @@ async def _fetch_kamis_price_single(
             best_item = item
     
     if not best_item:
-        print(f"DEBUG: ⚠️ _fetch_kamis_price_single best_item 없음 | region={region} | items 수={len(items)}")
+        logger.debug("_fetch_kamis_price_single best_item 없음 | region=%s | items 수=%s", region, len(items))
         return None
     
     # 가격 추출
@@ -808,8 +836,8 @@ async def _fetch_kamis_price_single(
         except (ValueError, TypeError):
             regday = target_day
     
-    print(f"DEBUG: _fetch_kamis_price_single 날짜 파싱 | regday={regday} | target_day={target_day} | yyyy={yyyy} | regday_raw={regday_raw}")
-    
+    logger.debug("_fetch_kamis_price_single 날짜 파싱 | regday=%s | target_day=%s", regday, target_day)
+
     return {
         "price": price_value,
         "date": regday,
@@ -896,23 +924,25 @@ async def fetch_kamis_price_period(
         "p_convert_kg_yn": "N",
     }
     
-    # 디버그: 등급 파라미터 전달 확인
-    print(f"DEBUG: fetch_kamis_price_period | part_name={part_name} | region={region} | grade_code={grade_code} | product_rank_code={product_rank_code}")
-    print(f"DEBUG: API PARAMS | itemcode={params['p_itemcode']} | kindcode={params['p_kindcode']} | p_periodProductList={params['p_periodProductList']} | countrycode={params['p_countrycode']}")
+    logger.debug(
+        "fetch_kamis_price_period | part_name=%s | region=%s | grade_code=%s | product_rank_code=%s",
+        part_name, region, grade_code, product_rank_code,
+    )
+    logger.debug(
+        "API PARAMS | itemcode=%s | kindcode=%s | p_periodProductList=%s",
+        params["p_itemcode"], params["p_kindcode"], params["p_periodProductList"],
+    )
 
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             req = client.build_request("GET", base, params=params)
-            print(f"DEBUG: KAMIS API 요청 URL: {req.url}")
+            logger.debug("KAMIS API 요청 URL: %s", req.url)
             resp = await client.send(req)
             resp.raise_for_status()
             payload = resp.text
-            print(f"DEBUG: KAMIS API 응답 길이: {len(payload)} bytes")
-            # 응답의 첫 1000자만 출력 (너무 길면 잘림)
+            logger.debug("KAMIS API 응답 길이: %s bytes", len(payload))
             if len(payload) > 1000:
-                print(f"DEBUG: KAMIS API 응답 미리보기: {payload[:1000]}...")
-            else:
-                print(f"DEBUG: KAMIS API 응답: {payload}")
+                logger.debug("KAMIS API 응답 미리보기: %s...", payload[:500])
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=503, detail=f"KAMIS API 연결 실패: HTTP {exc.response.status_code}") from exc
     except Exception as exc:
@@ -948,14 +978,13 @@ async def fetch_kamis_price_period(
     if not items and isinstance(parsed, dict) and "item" in parsed:
         items = _ensure_list(parsed.get("item"))
     
-    # 디버그: 파싱된 items의 첫 3개 항목 확인
     if items:
-        print(f"DEBUG: 파싱된 items 수: {len(items)}")
-        for idx, item in enumerate(items[:3], 1):
+        logger.debug("fetch_kamis_price_period 파싱된 items 수: %s", len(items))
+        for idx, item in enumerate(items[:2], 1):
             if isinstance(item, dict):
-                print(f"DEBUG: Item[{idx}] | productrankcode={item.get('productrankcode', 'N/A')} | countyname={item.get('countyname', 'N/A')} | price={item.get('price', 'N/A')} | itemname={item.get('itemname', 'N/A')} | kindname={item.get('kindname', 'N/A')}")
+                logger.debug("Item[%s] | productrankcode=%s | countyname=%s | price=%s", idx, item.get("productrankcode", "N/A"), item.get("countyname", "N/A"), item.get("price", "N/A"))
     else:
-        print(f"DEBUG: ⚠️ 파싱된 items가 없음")
+        logger.debug("fetch_kamis_price_period 파싱된 items 없음")
 
     target_name = codes.get("food_nm", "")
     # 날짜별로 그룹화하여 각 날짜의 가장 최신 항목만 선택 (실시간 가격 정보와 동일한 로직)
@@ -968,8 +997,7 @@ async def fetch_kamis_price_period(
     # 등급 필터링: 국내 소고기만 등급별 필터링 적용
     is_domestic_beef_for_filter = part_name.startswith("Beef_")
     
-    print(f"DEBUG: fetch_kamis_price_period 등급 필터링 | part_name={part_name} | grade_code={grade_code} | is_domestic_beef={is_domestic_beef_for_filter} | product_rank_code={product_rank_code}")
-    print(f"DEBUG: API 응답 items 수: {len(items)}")
+    logger.debug("fetch_kamis_price_period 등급 필터링 | part_name=%s | grade_code=%s | items=%s", part_name, grade_code, len(items))
 
     for item in items:
         if not isinstance(item, dict):
@@ -986,14 +1014,13 @@ async def fetch_kamis_price_period(
             
             # 등급코드가 명시적으로 다르면 스킵 (빈 문자열이나 "00"은 전체 평균이므로 허용하지 않음)
             if item_productrankcode and normalized_item_code != "00" and normalized_item_code != product_rank_code:
-                print(f"DEBUG: 등급 필터링 스킵 | 요청등급={product_rank_code} | API등급코드={item_productrankcode}(정규화={normalized_item_code}) | price={item.get('price', 'N/A')}")
+                logger.debug("등급 필터링 스킵 | 요청등급=%s | API등급코드=%s", product_rank_code, item_productrankcode)
                 continue
             # productrankcode가 없거나 "00"인 경우: p_periodProductList로 이미 필터링되었으므로 통과
-            # (API가 p_periodProductList 파라미터로 이미 등급별로 필터링된 데이터를 반환)
             elif not item_productrankcode or normalized_item_code == "00":
-                print(f"DEBUG: 등급 필터링 통과 (productrankcode 없음/00) | 요청등급={product_rank_code} | API등급코드={item_productrankcode} | price={item.get('price', 'N/A')} | p_periodProductList로 이미 필터링됨")
+                pass
             else:
-                print(f"DEBUG: 등급 필터링 통과 | 요청등급={product_rank_code} | API등급코드={item_productrankcode}(정규화={normalized_item_code}) | price={item.get('price', 'N/A')}")
+                logger.debug("등급 필터링 통과 | 요청등급=%s | API등급코드=%s", product_rank_code, normalized_item_code)
         
         # countyname 필터링: "평균", "평년" 제외하고 실제 지역명만 사용
         countyname = str(item.get("countyname", "")).strip()
@@ -1076,14 +1103,14 @@ async def fetch_kamis_price_period(
             date_obj = datetime.strptime(regday[:10], "%Y-%m-%d").date()
             # 오늘 날짜를 넘어가는 데이터는 제외
             if date_obj > today:
-                logger.debug(f"날짜 필터링: {regday}는 오늘({today}) 이후이므로 제외")
+                logger.debug("날짜 필터링: %s는 오늘(%s) 이후이므로 제외", regday, today)
                 continue
             # 2000년 이전이나 2100년 이후의 비정상적인 날짜 제외
             if date_obj.year < 2000 or date_obj.year > 2100:
-                logger.warning(f"비정상적인 날짜: {regday} (년도: {date_obj.year})")
+                logger.warning("비정상적인 날짜: %s (년도: %s)", regday, date_obj.year)
                 continue
         except (ValueError, TypeError) as e:
-            logger.warning(f"날짜 파싱 실패: {regday}, 에러: {e}")
+            logger.warning("날짜 파싱 실패: %s, 에러: %s", regday, e)
             continue
         
         # 날짜별로 그룹화 (같은 날짜에 여러 항목이 있을 수 있음)
@@ -1121,13 +1148,12 @@ async def fetch_kamis_price_period(
 
     result.sort(key=lambda x: x["date"])
     
-    # 디버그: 최종 결과 확인
-    print(f"DEBUG: fetch_kamis_price_period 최종 결과 | 등급코드={grade_code} | product_rank_code={product_rank_code} | 결과 수={len(result)}")
+    logger.debug("fetch_kamis_price_period 최종 결과 | 등급코드=%s | 결과 수=%s", grade_code, len(result))
     if result:
-        print(f"DEBUG: 최신 가격 | 날짜={result[-1]['date']} | 가격={result[-1]['price']}")
+        logger.debug("최신 가격 | 날짜=%s | 가격=%s", result[-1]["date"], result[-1]["price"])
     else:
-        print(f"DEBUG: ⚠️ 결과 없음 | 등급코드={grade_code} | product_rank_code={product_rank_code}")
-    
+        logger.debug("fetch_kamis_price_period 결과 없음 | 등급코드=%s", grade_code)
+
     return result
 
 

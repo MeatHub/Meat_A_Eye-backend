@@ -25,7 +25,25 @@ class PriceService:
         grade_code: str = "00",
         db: AsyncSession | None = None,
     ) -> dict[str, Any]:
-        """KAMIS API → DB 캐시. 모두 실패 시 HTTPException."""
+        """캐시 우선: DB에 당일/어제 데이터가 있으면 즉시 반환, 없으면 KAMIS API 호출 후 저장."""
+        today = date.today()
+        yesterday = today - timedelta(days=1)
+        cache_data: dict[str, Any] | None = None
+
+        # 1) 캐시 우선: DB에 최근(당일/어제) 데이터가 있으면 바로 반환
+        if db:
+            cache_data = await self._get_from_db_cache(db, part_name, region, today)
+            if cache_data:
+                try:
+                    cache_date = datetime.strptime(cache_data["price_date"], "%Y-%m-%d").date()
+                    # 어제 이상이면 신선한 캐시로 사용 (KAMIS는 어제까지 데이터 제공)
+                    if cache_date >= yesterday:
+                        return {**cache_data, "source": "cache"}
+                except (ValueError, TypeError):
+                    pass
+                # 오래된 캐시라도 API 실패 시 사용할 수 있도록 보관
+
+        # 2) 캐시 없거나 오래됨 → KAMIS API 호출
         try:
             api_data = await self.kamis.fetch_current_price(
                 part_name=part_name,
@@ -41,10 +59,9 @@ class PriceService:
         except Exception as e:
             logger.warning("KAMIS API call failed: %s", e)
 
-        if db:
-            cache_data = await self._get_from_db_cache(db, part_name, region, date.today())
-            if cache_data:
-                return {**cache_data, "source": "cache"}
+        # 3) API 실패 시 기존 캐시(오래된 것 포함) 반환
+        if db and cache_data:
+            return {**cache_data, "source": "cache"}
 
         raise HTTPException(status_code=503, detail="시세 API 연결 실패. 잠시 후 다시 시도해 주세요.")
 

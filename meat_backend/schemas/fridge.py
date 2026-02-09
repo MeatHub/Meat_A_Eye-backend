@@ -11,7 +11,7 @@ class FridgeItemResponse(BaseModel):
     status: str = "stored"
     expiryDate: date | None = None
     traceNumber: str | None = None
-    customName: str | None = None  # 더 이상 사용하지 않음 (하위 호환성 유지)
+    customName: str | None = None  # 사용자 지정 이름 (있으면 name에 반영, 레시피 LLM 전달용)
     desiredConsumptionDate: date | None = None
     grade: str | None = None  # 이력정보에서 가져온 등급
     meatInfoId: int  # 현재 선택된 고기 부위 ID
@@ -49,5 +49,6 @@ class FridgeStatusUpdate(BaseModel):
 
 
 class FridgeItemUpdate(BaseModel):
-    meatInfoId: int | None = None  # 고기 부위 변경 (customName 대신 사용)
+    meatInfoId: int | None = None  # 고기 부위 변경
+    customName: str | None = None  # 사용자 지정 이름 (레시피 LLM에 전달됨)
     desiredConsumptionDate: date | None = None

@@ -49,11 +49,14 @@ class Settings(BaseSettings):
     mtrace_proc_type: str = "1"
     # 수입육 이력제 (meatwatch REST) — SYS_ID에 API키 사용
     meatwatch_base_url: str = "http://www.meatwatch.go.kr/rest"
-    meatwatch_sys_id: str = "test2000"  # IMPORT_MEAT_API_KEY 또는 SYS_ID
+    meatwatch_sys_id: str = "test2000"
 
     # Web Push (VAPID)
     vapid_public_key: str = ""
     vapid_private_key: str = ""
+
+    # LLM 레시피 (Gemini 전용)
+    gemini_api_key: str = ""
 
     @property
     def database_url(self) -> str:

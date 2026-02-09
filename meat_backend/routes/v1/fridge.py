@@ -68,11 +68,13 @@ async def fridge_list(
     for r in rows:
         # meat_info_id가 None이면 "부위 선택" 상태
         if r.meat_info_id is None or not r.meat_info:
-            name = "부위 선택"
+            base_name = "부위 선택"
             meat_info_id = 0
         else:
-            name = r.meat_info.part_name
+            base_name = r.meat_info.part_name
             meat_info_id = r.meat_info_id
+        # 사용자가 수정한 이름(custom_name) 우선, 없으면 부위명 (레시피 LLM 전달용)
+        name = (r.custom_name or base_name).strip() or base_name
         d = _d_day(r.expiry_date)
         items.append(
             FridgeItemResponse(
@@ -83,7 +85,7 @@ async def fridge_list(
                 status=r.status,
                 expiryDate=r.expiry_date,
                 traceNumber=r.trace_number,
-                customName=None,  # 더 이상 사용하지 않음
+                customName=r.custom_name,
                 desiredConsumptionDate=r.desired_consumption_date,
                 grade=r.grade,  # 이력정보에서 가져온 등급
                 meatInfoId=meat_info_id,  # NULL이면 0으로 변환
@@ -290,6 +292,10 @@ async def fridge_update(
                 )
             item.meat_info_id = body.meatInfoId
     
+    # 사용자 지정 이름 변경
+    if body.customName is not None:
+        item.custom_name = body.customName.strip() or None
+    
     # 희망 섭취기간 변경
     if body.desiredConsumptionDate is not None:
         item.desired_consumption_date = body.desiredConsumptionDate
@@ -298,17 +304,19 @@ async def fridge_update(
     await db.refresh(item)
     await db.refresh(item, ["meat_info"])
     
-    # 업데이트된 정보 반환
+    # 업데이트된 정보 반환 (표시 이름 = custom_name 우선)
     if item.meat_info_id is None or not item.meat_info:
-        name = "부위 선택"
+        base_name = "부위 선택"
         meat_info_id = 0
     else:
-        name = item.meat_info.part_name
+        base_name = item.meat_info.part_name
         meat_info_id = item.meat_info_id
+    name = (item.custom_name or base_name).strip() or base_name
     return {
         "success": True,
         "id": item.id,
         "meatInfoId": meat_info_id,
+        "customName": item.custom_name,
         "desiredConsumptionDate": item.desired_consumption_date,
         "name": name,
     }

@@ -1,6 +1,7 @@
 """AI-01: 육류 AI 분석 요청 (multipart image, ocr/vision)."""
 import logging
 import os
+import random
 from datetime import date, datetime, timedelta
 from typing import Annotated
 
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ...config.database import get_db
+from ...config.settings import settings as app_settings
 from ...models.member import Member
 from ...models.recognition_log import RecognitionLog
 from ...models.fridge_item import FridgeItem
@@ -260,6 +262,33 @@ class LLMRecipeResponse(BaseModel):
     recipe: str
 
 
+class RecipeForPartRequest(BaseModel):
+    partName: str
+
+
+def _call_llm_recipe(prompt: str, fallback_meat_str: str) -> str:
+    """Gemini(Flash)로 레시피 생성. .env의 GEMINI_API_KEY 사용."""
+    gemini_api_key = (app_settings.gemini_api_key or "").strip()
+    if not gemini_api_key:
+        return (
+            f"# 고기 레시피 추천\n\n{fallback_meat_str}\n\n"
+            "레시피를 생성하려면 .env에 GEMINI_API_KEY를 설정해주세요."
+        )
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=gemini_api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(
+            "당신은 전문 요리사입니다. 한국어로 레시피를 작성해주세요.\n\n" + prompt
+        )
+        return (response.text or "").strip()
+    except Exception as e:
+        logger.warning("Gemini 레시피 생성 실패: %s", e)
+        return (
+            f"# 레시피 추천\n\n{fallback_meat_str}\n\n레시피 생성 중 오류가 발생했습니다."
+        )
+
+
 @router.post(
     "/recipe",
     response_model=LLMRecipeResponse,
@@ -285,17 +314,11 @@ async def generate_recipe(
         result = await db.execute(q)
         items = result.scalars().all()
         
-        # 고기 부위 리스트 추출
+        # 고기 부위 리스트 추출 (사용자 수정 이름 custom_name 우선, 레시피 LLM 전달용)
         meat_parts = []
         for item in items:
-            if item.meat_info:
-                meat_parts.append(item.meat_info.part_name)
-        
-        # 재료 리스트 출력 (강력한 로깅)
-        print("=" * 50)
-        print(f"🚨 [레시피 생성] DB에서 가져온 재료 리스트:")
-        print(f"🚨 [DETAILS]: {meat_parts}")
-        print("=" * 50)
+            display_name = (item.custom_name or (item.meat_info.part_name if item.meat_info else "고기")).strip() or (item.meat_info.part_name if item.meat_info else "고기")
+            meat_parts.append(display_name)
         
         if not meat_parts:
             print("=" * 50)
@@ -312,10 +335,6 @@ async def generate_recipe(
         print("=" * 50)
         logger.exception(f"냉장고 조회 실패: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"냉장고 조회 실패: {str(e)}")
-    
-    # LLM API 호출 (OpenAI 또는 Gemini)
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
     
     meat_list_str = ", ".join(meat_parts)
     prompt = f"""현재 냉장고에 있는 고기 부위: {meat_list_str}
@@ -337,73 +356,100 @@ async def generate_recipe(
 - 조리 팁이나 주의사항
 
 한국어로 작성해주세요."""
+    recipe_text = _call_llm_recipe(prompt, f"현재 냉장고에 있는 고기: {meat_list_str}")
+    if not recipe_text.strip():
+        recipe_text = f"# 고기 레시피 추천\n\n현재 냉장고에 있는 고기: {meat_list_str}\n\n맛있게 드세요! 🥩"
+    return LLMRecipeResponse(recipe=recipe_text)
 
-    recipe_text = ""
-    
-    # OpenAI 사용
-    if openai_api_key:
-        try:
-            import openai
-            client = openai.OpenAI(api_key=openai_api_key)
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "당신은 전문 요리사입니다. 한국어로 레시피를 작성해주세요."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=1000,
-            )
-            recipe_text = response.choices[0].message.content
-        except Exception as e:
-            print("=" * 50)
-            print(f"🚨 [REAL ERROR] Endpoint: /api/v1/ai/recipe")
-            print(f"🚨 [DETAILS]: OpenAI API 호출 실패 - {type(e).__name__}: {str(e)}")
-            print("=" * 50)
-            logger.exception(f"OpenAI API 호출 실패: {e}")
-            recipe_text = f"# 레시피 추천\n\n현재 냉장고에 있는 고기: {meat_list_str}\n\n레시피 생성 중 오류가 발생했습니다."
-    
-    # Gemini 사용 (OpenAI 실패 시)
-    elif gemini_api_key:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel('gemini-pro')
-            response = model.generate_content(prompt)
-            recipe_text = response.text
-        except Exception as e:
-            print("=" * 50)
-            print(f"🚨 [REAL ERROR] Endpoint: /api/v1/ai/recipe")
-            print(f"🚨 [DETAILS]: Gemini API 호출 실패 - {type(e).__name__}: {str(e)}")
-            print("=" * 50)
-            logger.exception(f"Gemini API 호출 실패: {e}")
-            recipe_text = f"# 레시피 추천\n\n현재 냉장고에 있는 고기: {meat_list_str}\n\n레시피 생성 중 오류가 발생했습니다."
-    
-    # LLM API가 없으면 기본 레시피 반환
-    else:
-        print("=" * 50)
-        print(f"🚨 [REAL ERROR] Endpoint: /api/v1/ai/recipe")
-        print(f"🚨 [DETAILS]: LLM API 키 없음 (OPENAI_API_KEY, GEMINI_API_KEY 모두 없음)")
-        print("=" * 50)
-        recipe_text = f"""# 고기 레시피 추천
 
-현재 냉장고에 있는 고기: {meat_list_str}
+@router.post(
+    "/recipe-for-part",
+    response_model=LLMRecipeResponse,
+    summary="이 부위 레시피 추천 (분석한 부위 1개)",
+)
+async def recipe_for_part(
+    body: RecipeForPartRequest,
+):
+    """분석한 고기 부위(partName) 하나로 레시피 생성. 인증 없이 호출 가능."""
+    part_name = (body.partName or "").strip()
+    if not part_name:
+        return LLMRecipeResponse(
+            recipe="# 레시피 추천\n\n부위명이 없습니다. 먼저 고기 부위를 분석해주세요."
+        )
+    prompt = f"""다음 고기 부위로 만드는 레시피 하나를 추천해주세요.
 
-## 추천 레시피
+부위: {part_name}
 
-### 1. 고기 요리
-**재료:**
-- {meat_list_str}
-- 소금, 후추
-- 올리브유
+다음 형식으로 작성해주세요:
 
-**조리법:**
-1. 고기를 실온에 30분간 두어 온도를 맞춥니다.
-2. 소금과 후추로 간을 합니다.
-3. 팬을 달군 뒤 올리브유를 두릅니다.
-4. 고기를 넣고 각 면을 2-3분씩 굽습니다.
-5. 5분간 휴지시킨 후 제공합니다.
+# 레시피 이름
 
-맛있게 드세요! 🥩"""
+## 재료
+- 재료 목록
 
+## 조리법
+1. 첫 번째 단계
+2. 두 번째 단계
+...
+
+## 팁
+- 조리 팁이나 주의사항
+
+한국어로 작성해주세요."""
+    fallback = f"부위: {part_name}"
+    recipe_text = _call_llm_recipe(prompt, fallback)
+    if not recipe_text.strip():
+        recipe_text = f"# {part_name} 레시피\n\n부위: {part_name}\n\n레시피를 생성하려면 .env에 GEMINI_API_KEY를 설정해주세요."
+    return LLMRecipeResponse(recipe=recipe_text)
+
+
+@router.post(
+    "/recipe-random",
+    response_model=LLMRecipeResponse,
+    summary="랜덤 레시피 (냉장고에서 랜덤 1부위)",
+    responses={401: {"description": "인증 필요"}},
+)
+async def recipe_random(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    member: Annotated[Member, Depends(get_current_user)],
+):
+    """냉장고 보관 중인 고기 중 랜덤 1개를 골라 그 부위로 레시피 생성."""
+    q = (
+        select(FridgeItem)
+        .where(FridgeItem.member_id == member.id)
+        .where(FridgeItem.status == "stored")
+        .options(selectinload(FridgeItem.meat_info))
+    )
+    result = await db.execute(q)
+    items = result.scalars().all()
+    if not items:
+        return LLMRecipeResponse(
+            recipe="# 랜덤 레시피\n\n냉장고에 보관 중인 고기가 없습니다. 고기를 추가한 후 다시 시도해주세요."
+        )
+    item = random.choice(items)
+    display_name = (item.custom_name or (item.meat_info.part_name if item.meat_info else "고기")).strip() or (item.meat_info.part_name if item.meat_info else "고기")
+    prompt = f"""다음 고기 부위로 만드는 레시피 하나를 다양한 스타일(한식/양식/일식/퓨전 등)으로 추천해주세요.
+
+부위: {display_name}
+
+다음 형식으로 작성해주세요:
+
+# 레시피 이름
+
+## 재료
+- 재료 목록
+
+## 조리법
+1. 첫 번째 단계
+2. 두 번째 단계
+...
+
+## 팁
+- 조리 팁이나 주의사항
+
+한국어로 작성해주세요."""
+    fallback = f"부위: {display_name}"
+    recipe_text = _call_llm_recipe(prompt, fallback)
+    if not recipe_text.strip():
+        recipe_text = f"# {display_name} 레시피\n\n부위: {display_name}\n\n레시피를 생성하려면 .env에 GEMINI_API_KEY를 설정해주세요."
     return LLMRecipeResponse(recipe=recipe_text)
