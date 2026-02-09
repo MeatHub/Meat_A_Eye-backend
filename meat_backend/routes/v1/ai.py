@@ -275,17 +275,73 @@ def _call_llm_recipe(prompt: str, fallback_meat_str: str) -> str:
             "레시피를 생성하려면 .env에 GEMINI_API_KEY를 설정해주세요."
         )
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=gemini_api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(
-            "당신은 전문 요리사입니다. 한국어로 레시피를 작성해주세요.\n\n" + prompt
+        from google import genai
+        
+        client = genai.Client(api_key=gemini_api_key)
+        # 간결하고 요약된 레시피를 생성하도록 시스템 프롬프트 설정 (영어로 작성하여 번역 시간 단축)
+        system_prompt = """You are a creative professional chef. Write diverse, unique, and concise recipes in Korean.
+- Create VARIETY: Avoid repetitive recipes like "steak" - suggest different cooking styles (Korean, Western, Japanese, Chinese, fusion, etc.)
+- Use diverse cooking methods: grilling, stir-frying, braising, stewing, frying, steaming, etc.
+- Skip unnecessary explanations or long introductions
+- Recipe title: Write ONLY in Korean. DO NOT include English translation in parentheses or brackets. Example: "돼지 등심 사과 처트니 구이" (NOT "돼지 등심 사과 처트니 구이 (Pan-Seared Pork Loin with Apple Chutney)")
+- List COMPLETE ingredients with SPECIFIC AMOUNTS: For each recipe, include ALL ingredients needed:
+  * Main meat: Include amount, thickness, and preparation method (e.g., "돼지 등심 스테이크용(약 2cm 두께) 300~400g")
+  * Marinade/Seasoning: List ALL marinade ingredients with amounts (e.g., "소금, 후추, 올리브오일 약간")
+  * Sauce ingredients: If recipe name includes a sauce (caramel, teriyaki, doubanjiang, etc.), you MUST list ALL sauce ingredients with specific amounts. Example: "캐러멜 소스: 설탕 2큰술, 버터 1큰술, 오렌지 1개(즙을 냄), 디종 머스터드 1작은술, 레몬즙 1작은술, 다진 마늘 1/2작은술"
+  * Vegetables: Include all vegetables with amounts
+  * Spices and aromatics: Include garlic, ginger, etc. with amounts
+  CRITICAL: DO NOT skip any ingredients. If the recipe name mentions a sauce or specific flavor, you MUST include ALL ingredients for that sauce/flavor with specific amounts.
+- Summarize cooking steps in 3-5 steps
+- Provide only 1-2 simple tips
+- Keep the overall length short and easy to read
+- Be creative and suggest unique recipes each time
+- Write ALL section headers in Korean: "재료", "조리 방법", "팁" (NOT "재료 (Ingredients)", "Cooking Steps", etc.)
+Write the entire response in Korean only, without any English translations."""
+        
+        full_prompt = system_prompt + "\n\n" + prompt
+        
+        # 모델 이름: models/ 접두사 없이 사용
+        # max_output_tokens을 충분히 설정하여 레시피가 잘리지 않도록 함
+        from google.genai import types
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=full_prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=3000,  # 최대 3000 토큰으로 설정하여 전체 레시피(제목, 재료, 조리방법, 팁)가 완전히 생성되도록 함
+                temperature=0.95,  # 다양성을 높이기 위해 temperature 증가 (0.7 -> 0.95)
+            )
         )
-        return (response.text or "").strip()
-    except Exception as e:
-        logger.warning("Gemini 레시피 생성 실패: %s", e)
+        
+        # 1. response.text 속성 우선 확인 (가장 간단)
+        if hasattr(response, 'text') and response.text:
+            return response.text.strip()
+        
+        # 2. candidates를 통한 추출 (테스트에서 확인한 방식)
+        if hasattr(response, 'candidates') and response.candidates:
+            candidate = response.candidates[0]
+            if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                # parts는 리스트이고, 각 part는 text 속성을 가짐
+                text_parts = [part.text for part in candidate.content.parts if hasattr(part, 'text') and part.text]
+                if text_parts:
+                    return "\n".join(text_parts).strip()
+        
         return (
-            f"# 레시피 추천\n\n{fallback_meat_str}\n\n레시피 생성 중 오류가 발생했습니다."
+            f"# 레시피 추천\n\n{fallback_meat_str}\n\n레시피 생성 중 응답 형식 오류가 발생했습니다."
+        )
+    except Exception as e:
+        error_str = str(e)
+        logger.warning("Gemini 레시피 생성 실패: %s", e)
+        logger.exception("상세 오류:")
+        
+        # 429 에러 (할당량 초과) 처리
+        if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "quota" in error_str.lower():
+            error_message = "API 사용량 한도를 초과했습니다. 잠시 후 다시 시도해주세요."
+        else:
+            # 일반 에러: 간단한 메시지만 추출
+            error_message = "레시피 생성에 실패했습니다. 다시 시도해주세요."
+        
+        return (
+            f"# 레시피 추천\n\n{fallback_meat_str}\n\n{error_message}"
         )
 
 
@@ -321,41 +377,53 @@ async def generate_recipe(
             meat_parts.append(display_name)
         
         if not meat_parts:
-            print("=" * 50)
-            print(f"🚨 [REAL ERROR] Endpoint: /api/v1/ai/recipe")
-            print(f"🚨 [DETAILS]: 냉장고에 고기 없음 (member_id: {member.id})")
-            print("=" * 50)
+            logger.warning(f"냉장고에 고기 없음 (member_id: {member.id})")
             return LLMRecipeResponse(
                 recipe="# 레시피 추천\n\n현재 냉장고에 보관 중인 고기가 없습니다. 고기를 추가한 후 다시 시도해주세요."
             )
     except Exception as e:
-        print("=" * 50)
-        print(f"🚨 [REAL ERROR] Endpoint: /api/v1/ai/recipe")
-        print(f"🚨 [DETAILS]: DB 조회 실패 - {type(e).__name__}: {str(e)}")
-        print("=" * 50)
         logger.exception(f"냉장고 조회 실패: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"냉장고 조회 실패: {str(e)}")
     
     meat_list_str = ", ".join(meat_parts)
-    prompt = f"""현재 냉장고에 있는 고기 부위: {meat_list_str}
+    prompt = f"""Meat parts currently in the refrigerator: {meat_list_str}
 
-이 고기들로 만들 수 있는 맛있는 레시피를 추천해주세요. 
-다음 형식으로 작성해주세요:
+Recommend one creative and diverse recipe that can be made with these meats.
+**CRITICAL LANGUAGE RULE: Write EVERYTHING in Korean ONLY. DO NOT include any English translations, especially in recipe titles. Recipe title should be Korean only, like "돼지 등심 사과 처트니 구이" - NOT "돼지 등심 사과 처트니 구이 (Pan-Seared Pork Loin with Apple Chutney)".**
+**CRITICAL: Create VARIETY - avoid common recipes like "steak". Suggest unique cooking styles: Korean (bulgogi, galbi, bossam), Western (stew, pasta, casserole), Japanese (teriyaki, sukiyaki), Chinese (stir-fry, braised), fusion, etc. Use diverse cooking methods: grilling, stir-frying, braising, stewing, frying, steaming, etc.**
+**Important: Write concisely. Cooking steps: summarize in 3-5 steps.**
+**CRITICAL for Ingredients: Include ALL necessary ingredients with SPECIFIC AMOUNTS. The recipe name must match the ingredients list.**
+**Example format (Korean style):**
+- 주재료: 돼지 등심 스테이크용(약 2cm 두께) 300~400g
+- 밑간: 소금, 후추, 올리브오일 약간
+- 캐러멜 소스: 설탕 2큰술, 버터 1큰술, 오렌지 1개(즙을 냄 또는 오렌지 마말레이드 2큰술), 디종 머스터드 1작은술(생략 가능), 레몬즙 또는 식초 1작은술, 다진 마늘 1/2작은술
+**DO NOT skip ingredients. If the recipe name mentions a sauce (caramel, teriyaki, doubanjiang, etc.) or specific flavor, you MUST include ALL ingredients for that sauce/flavor with specific amounts.**
 
-# 레시피 이름
+Write in the following format (ALL in Korean, NO English):
+
+# 돼지 등심 사과 처트니 구이
 
 ## 재료
-- 재료 목록
+주재료: 돼지 등심 스테이크용(약 2cm 두께) 300~400g
+밑간: 소금, 후추, 올리브오일 약간
+사과 처트니 소스: 사과 1개(작게 다짐), 양파 1/2개(다짐), 설탕 2큰술, 식초 1큰술, 생강 1작은술(다짐), 계피가루 약간
+채소: 감자 2개, 당근 1개
+기타: 버터 1큰술, 다진 마늘 1작은술
 
-## 조리법
-1. 첫 번째 단계
-2. 두 번째 단계
-...
+## 조리 방법
+1. 돼지 등심에 소금, 후추, 올리브오일을 발라 30분 재워둡니다.
+2. 사과 처트니 소스를 만들기 위해 사과, 양파, 설탕, 식초, 생강을 넣고 약한 불에서 졸입니다.
+3. 팬에 버터를 녹이고 돼지 등심을 앞뒤로 노릇하게 굽습니다.
+4. 구운 고기를 접시에 담고 사과 처트니 소스를 올려 완성합니다.
 
 ## 팁
-- 조리 팁이나 주의사항
+- 고기를 너무 오래 구우면 질겨지니 중간 불에서 빠르게 구워주세요.
 
-한국어로 작성해주세요."""
+CRITICAL FORMATTING RULES:
+1. Recipe title: Write ONLY in Korean. Example: "# 돼지 등심 사과 처트니 구이" - DO NOT add English like "(Pan-Seared Pork Loin with Apple Chutney)"
+2. Section headers: Use ONLY Korean - "## 재료", "## 조리 방법", "## 팁" - NOT "재료 (Ingredients)" or "Cooking Steps"
+3. Write ALL content in Korean only - no English translations anywhere
+4. Follow the exact format above with all sections: 재료, 조리 방법, 팁"""
     recipe_text = _call_llm_recipe(prompt, f"현재 냉장고에 있는 고기: {meat_list_str}")
     if not recipe_text.strip():
         recipe_text = f"# 고기 레시피 추천\n\n현재 냉장고에 있는 고기: {meat_list_str}\n\n맛있게 드세요! 🥩"
@@ -376,26 +444,45 @@ async def recipe_for_part(
         return LLMRecipeResponse(
             recipe="# 레시피 추천\n\n부위명이 없습니다. 먼저 고기 부위를 분석해주세요."
         )
-    prompt = f"""다음 고기 부위로 만드는 레시피 하나를 추천해주세요.
+    prompt = f"""Recommend one creative and diverse recipe using the following meat part.
 
-부위: {part_name}
+Meat part: {part_name}
 
-다음 형식으로 작성해주세요:
+**CRITICAL LANGUAGE RULE: Write EVERYTHING in Korean ONLY. DO NOT include any English translations, especially in recipe titles. Recipe title should be Korean only, like "돼지 등심 사과 처트니 구이" - NOT "돼지 등심 사과 처트니 구이 (Pan-Seared Pork Loin with Apple Chutney)".**
+**CRITICAL: Create VARIETY - avoid common recipes like "steak". Suggest unique cooking styles: Korean (bulgogi, galbi, bossam, jeyuk bokkeum), Western (stew, pasta, casserole, roast), Japanese (teriyaki, sukiyaki, yakitori), Chinese (stir-fry, braised, mapo), fusion, etc. Use diverse cooking methods: grilling, stir-frying, braising, stewing, frying, steaming, etc.**
+**Important: Write concisely. Cooking steps: summarize in 3-5 steps.**
+**CRITICAL for Ingredients: Include ALL necessary ingredients with SPECIFIC AMOUNTS. The recipe name must match the ingredients list.**
+**Example format (Korean style):**
+- 주재료: 돼지 등심 스테이크용(약 2cm 두께) 300~400g
+- 밑간: 소금, 후추, 올리브오일 약간
+- 캐러멜 소스: 설탕 2큰술, 버터 1큰술, 오렌지 1개(즙을 냄 또는 오렌지 마말레이드 2큰술), 디종 머스터드 1작은술(생략 가능), 레몬즙 또는 식초 1작은술, 다진 마늘 1/2작은술
+**DO NOT skip ingredients. If the recipe name mentions a sauce (caramel, teriyaki, doubanjiang, etc.) or specific flavor, you MUST include ALL ingredients for that sauce/flavor with specific amounts.**
 
-# 레시피 이름
+Write in the following format (ALL in Korean, NO English):
+
+# 돼지 등심 사과 처트니 구이
 
 ## 재료
-- 재료 목록
+주재료: 돼지 등심 스테이크용(약 2cm 두께) 300~400g
+밑간: 소금, 후추, 올리브오일 약간
+사과 처트니 소스: 사과 1개(작게 다짐), 양파 1/2개(다짐), 설탕 2큰술, 식초 1큰술, 생강 1작은술(다짐), 계피가루 약간
+채소: 감자 2개, 당근 1개
+기타: 버터 1큰술, 다진 마늘 1작은술
 
-## 조리법
-1. 첫 번째 단계
-2. 두 번째 단계
-...
+## 조리 방법
+1. 돼지 등심에 소금, 후추, 올리브오일을 발라 30분 재워둡니다.
+2. 사과 처트니 소스를 만들기 위해 사과, 양파, 설탕, 식초, 생강을 넣고 약한 불에서 졸입니다.
+3. 팬에 버터를 녹이고 돼지 등심을 앞뒤로 노릇하게 굽습니다.
+4. 구운 고기를 접시에 담고 사과 처트니 소스를 올려 완성합니다.
 
 ## 팁
-- 조리 팁이나 주의사항
+- 고기를 너무 오래 구우면 질겨지니 중간 불에서 빠르게 구워주세요.
 
-한국어로 작성해주세요."""
+CRITICAL FORMATTING RULES:
+1. Recipe title: Write ONLY in Korean. Example: "# 돼지 등심 사과 처트니 구이" - DO NOT add English like "(Pan-Seared Pork Loin with Apple Chutney)"
+2. Section headers: Use ONLY Korean - "## 재료", "## 조리 방법", "## 팁" - NOT "재료 (Ingredients)" or "Cooking Steps"
+3. Write ALL content in Korean only - no English translations anywhere
+4. Follow the exact format above with all sections: 재료, 조리 방법, 팁"""
     fallback = f"부위: {part_name}"
     recipe_text = _call_llm_recipe(prompt, fallback)
     if not recipe_text.strip():
@@ -428,26 +515,45 @@ async def recipe_random(
         )
     item = random.choice(items)
     display_name = (item.custom_name or (item.meat_info.part_name if item.meat_info else "고기")).strip() or (item.meat_info.part_name if item.meat_info else "고기")
-    prompt = f"""다음 고기 부위로 만드는 레시피 하나를 다양한 스타일(한식/양식/일식/퓨전 등)으로 추천해주세요.
+    prompt = f"""Recommend one creative and diverse recipe using the following meat part.
 
-부위: {display_name}
+Meat part: {display_name}
 
-다음 형식으로 작성해주세요:
+**CRITICAL LANGUAGE RULE: Write EVERYTHING in Korean ONLY. DO NOT include any English translations, especially in recipe titles. Recipe title should be Korean only, like "돼지 등심 사과 처트니 구이" - NOT "돼지 등심 사과 처트니 구이 (Pan-Seared Pork Loin with Apple Chutney)".**
+**CRITICAL: Create VARIETY - avoid common recipes like "steak". Suggest unique cooking styles: Korean (bulgogi, galbi, bossam, jeyuk bokkeum), Western (stew, pasta, casserole, roast), Japanese (teriyaki, sukiyaki, yakitori), Chinese (stir-fry, braised, mapo), fusion, etc. Use diverse cooking methods: grilling, stir-frying, braising, stewing, frying, steaming, etc.**
+**Important: Write concisely. Cooking steps: summarize in 3-5 steps.**
+**CRITICAL for Ingredients: Include ALL necessary ingredients with SPECIFIC AMOUNTS. The recipe name must match the ingredients list.**
+**Example format (Korean style):**
+- 주재료: 돼지 등심 스테이크용(약 2cm 두께) 300~400g
+- 밑간: 소금, 후추, 올리브오일 약간
+- 캐러멜 소스: 설탕 2큰술, 버터 1큰술, 오렌지 1개(즙을 냄 또는 오렌지 마말레이드 2큰술), 디종 머스터드 1작은술(생략 가능), 레몬즙 또는 식초 1작은술, 다진 마늘 1/2작은술
+**DO NOT skip ingredients. If the recipe name mentions a sauce (caramel, teriyaki, doubanjiang, etc.) or specific flavor, you MUST include ALL ingredients for that sauce/flavor with specific amounts.**
 
-# 레시피 이름
+Write in the following format (ALL in Korean, NO English):
+
+# 돼지 등심 사과 처트니 구이
 
 ## 재료
-- 재료 목록
+주재료: 돼지 등심 스테이크용(약 2cm 두께) 300~400g
+밑간: 소금, 후추, 올리브오일 약간
+사과 처트니 소스: 사과 1개(작게 다짐), 양파 1/2개(다짐), 설탕 2큰술, 식초 1큰술, 생강 1작은술(다짐), 계피가루 약간
+채소: 감자 2개, 당근 1개
+기타: 버터 1큰술, 다진 마늘 1작은술
 
-## 조리법
-1. 첫 번째 단계
-2. 두 번째 단계
-...
+## 조리 방법
+1. 돼지 등심에 소금, 후추, 올리브오일을 발라 30분 재워둡니다.
+2. 사과 처트니 소스를 만들기 위해 사과, 양파, 설탕, 식초, 생강을 넣고 약한 불에서 졸입니다.
+3. 팬에 버터를 녹이고 돼지 등심을 앞뒤로 노릇하게 굽습니다.
+4. 구운 고기를 접시에 담고 사과 처트니 소스를 올려 완성합니다.
 
 ## 팁
-- 조리 팁이나 주의사항
+- 고기를 너무 오래 구우면 질겨지니 중간 불에서 빠르게 구워주세요.
 
-한국어로 작성해주세요."""
+CRITICAL FORMATTING RULES:
+1. Recipe title: Write ONLY in Korean. Example: "# 돼지 등심 사과 처트니 구이" - DO NOT add English like "(Pan-Seared Pork Loin with Apple Chutney)"
+2. Section headers: Use ONLY Korean - "## 재료", "## 조리 방법", "## 팁" - NOT "재료 (Ingredients)" or "Cooking Steps"
+3. Write ALL content in Korean only - no English translations anywhere
+4. Follow the exact format above with all sections: 재료, 조리 방법, 팁"""
     fallback = f"부위: {display_name}"
     recipe_text = _call_llm_recipe(prompt, fallback)
     if not recipe_text.strip():

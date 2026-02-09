@@ -25,4 +25,4 @@ email-validator>=2.1.0
 pywebpush>=1.14.0
 
 # LLM 레시피 (Gemini)
-google-generativeai>=0.8.0
+google-genai>=0.2.0
