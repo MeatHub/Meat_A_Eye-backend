@@ -185,3 +185,70 @@ INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guid
 ('갈비', 'pork', 270, 18.0, 20.0, '냉장 3일, 냉동 3개월');
 
 select * from meat_info;
+
+-- 1. 외래 키 체크 비활성화
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- 2. 기존 데이터 삭제
+DELETE FROM meat_info;
+
+-- 3. 새로운 데이터 삽입 (소고기 10개 + 돼지고기 7개)
+-- 영양정보는 API로 호출하므로 NULL로 설정
+-- 소고기 (beef) 10개
+INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guide) VALUES
+('안심', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('등심', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('채끝', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('목심', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('우둔', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('설도', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('양지', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('사태', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('갈비', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('앞다리', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월');
+
+-- 돼지고기 (pork) 7개
+INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guide) VALUES
+('안심', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('등심', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('목심', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('앞다리', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('뒷다리', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('삼겹살', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('갈비', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월');
+
+-- 4. 외래 키 체크 재활성화
+SET FOREIGN_KEY_CHECKS = 1;
+
+
+-- fridge_items에 meat_info_id가 있지만 meat_info 테이블에 해당 ID가 없는 경우 확인
+SELECT fi.id, fi.meat_info_id, fi.member_id
+FROM fridge_items fi
+LEFT JOIN meat_info mi ON fi.meat_info_id = mi.id
+WHERE mi.id IS NULL;
+
+-- meat_info_id가 0인 레코드 확인 (이론적으로는 발생하지 않아야 함)
+SELECT id, meat_info_id, member_id
+FROM fridge_items
+WHERE meat_info_id = 0 OR meat_info_id IS NULL;
+
+select * from meat_info;
+
+
+-- saved_recipes 테이블 생성
+CREATE TABLE IF NOT EXISTS saved_recipes (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    member_id BIGINT NOT NULL,
+    title VARCHAR(200) NOT NULL COMMENT '레시피 제목',
+    content TEXT NOT NULL COMMENT '레시피 내용 (마크다운)',
+    source ENUM('ai_random', 'fridge_random', 'fridge_multi', 'part_specific') NOT NULL COMMENT '레시피 출처',
+    used_meats TEXT NULL COMMENT '사용된 고기 목록 (JSON)',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (member_id) REFERENCES members(id) ON DELETE CASCADE,
+    INDEX idx_member_id (member_id),
+    INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='저장된 레시피';
+
+ALTER TABLE saved_recipes 
+MODIFY COLUMN source VARCHAR(50) NOT NULL COMMENT '레시피 출처 (ai_random, fridge_random, fridge_multi, part_specific)';

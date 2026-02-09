@@ -5,6 +5,7 @@ from .fridge_item import FridgeItem
 from .market_price import MarketPrice, MarketPriceHistory
 from .web_push_subscription import WebPushSubscription
 from .web_notification import WebNotification
+from .saved_recipe import SavedRecipe, RecipeSource
 
 __all__ = [
     "Member",
@@ -15,4 +16,6 @@ __all__ = [
     "MarketPriceHistory",
     "WebPushSubscription",
     "WebNotification",
+    "SavedRecipe",
+    "RecipeSource",
 ]

@@ -20,3 +20,4 @@ class Member(Base):
     recognition_logs = relationship("RecognitionLog", back_populates="member", cascade="all, delete-orphan")
     fridge_items = relationship("FridgeItem", back_populates="member", cascade="all, delete-orphan")
     web_notifications = relationship("WebNotification", back_populates="member", cascade="all, delete-orphan")
+    saved_recipes = relationship("SavedRecipe", back_populates="member", cascade="all, delete-orphan")

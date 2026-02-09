@@ -19,6 +19,7 @@ from ...models.recognition_log import RecognitionLog
 from ...models.fridge_item import FridgeItem
 from ...models.meat_info import MeatInfo
 from ...models.web_notification import WebNotification
+from ...models.saved_recipe import SavedRecipe, RecipeSource
 from ...schemas.ai import AIAnalyzeResponse, AIMode, NutritionInfo, PriceInfo, TraceabilityInfo
 from ...apis import AIProxyService
 from ...services.traceability import fetch_traceability
@@ -264,6 +265,27 @@ class LLMRecipeResponse(BaseModel):
 
 class RecipeForPartRequest(BaseModel):
     partName: str
+
+
+class SaveRecipeRequest(BaseModel):
+    title: str
+    content: str
+    source: str  # RecipeSource enum 값
+    used_meats: str | None = None  # JSON 문자열
+
+
+class SavedRecipeResponse(BaseModel):
+    id: int
+    title: str
+    content: str
+    source: str
+    used_meats: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class RecipeListResponse(BaseModel):
+    recipes: list[SavedRecipeResponse]
 
 
 def _call_llm_recipe(prompt: str, fallback_meat_str: str) -> str:
@@ -559,3 +581,182 @@ CRITICAL FORMATTING RULES:
     if not recipe_text.strip():
         recipe_text = f"# {display_name} 레시피\n\n부위: {display_name}\n\n레시피를 생성하려면 .env에 GEMINI_API_KEY를 설정해주세요."
     return LLMRecipeResponse(recipe=recipe_text)
+
+
+@router.post(
+    "/recipe-random-any",
+    response_model=LLMRecipeResponse,
+    summary="AI 랜덤 레시피 (아무 고기로 생성)",
+    responses={401: {"description": "인증 필요"}},
+)
+async def recipe_random_any(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    member: Annotated[Member, Depends(get_current_user)],
+):
+    """아무 고기나 선택하여 랜덤 레시피 생성. 냉장고와 무관하게 다양한 고기 부위 중 랜덤 선택."""
+    # 모든 고기 부위 중 랜덤 선택
+    q = select(MeatInfo).limit(100)  # 최대 100개
+    result = await db.execute(q)
+    all_meats = result.scalars().all()
+    
+    if not all_meats:
+        return LLMRecipeResponse(
+            recipe="# 랜덤 레시피\n\n고기 부위 정보를 찾을 수 없습니다."
+        )
+    
+    random_meat = random.choice(all_meats)
+    display_name = random_meat.part_name
+    
+    prompt = f"""Recommend one creative and diverse recipe using the following meat part.
+
+Meat part: {display_name}
+
+**CRITICAL LANGUAGE RULE: Write EVERYTHING in Korean ONLY. DO NOT include any English translations, especially in recipe titles. Recipe title should be Korean only, like "돼지 등심 사과 처트니 구이" - NOT "돼지 등심 사과 처트니 구이 (Pan-Seared Pork Loin with Apple Chutney)".**
+**CRITICAL: Create VARIETY - avoid common recipes like "steak". Suggest unique cooking styles: Korean (bulgogi, galbi, bossam, jeyuk bokkeum), Western (stew, pasta, casserole, roast), Japanese (teriyaki, sukiyaki, yakitori), Chinese (stir-fry, braised, mapo), fusion, etc. Use diverse cooking methods: grilling, stir-frying, braising, stewing, frying, steaming, etc.**
+**Important: Write concisely. Cooking steps: summarize in 3-5 steps.**
+**CRITICAL for Ingredients: Include ALL necessary ingredients with SPECIFIC AMOUNTS. The recipe name must match the ingredients list.**
+**Example format (Korean style):**
+- 주재료: 돼지 등심 스테이크용(약 2cm 두께) 300~400g
+- 밑간: 소금, 후추, 올리브오일 약간
+- 캐러멜 소스: 설탕 2큰술, 버터 1큰술, 오렌지 1개(즙을 냄 또는 오렌지 마말레이드 2큰술), 디종 머스터드 1작은술(생략 가능), 레몬즙 또는 식초 1작은술, 다진 마늘 1/2작은술
+**DO NOT skip ingredients. If the recipe name mentions a sauce (caramel, teriyaki, doubanjiang, etc.) or specific flavor, you MUST include ALL ingredients for that sauce/flavor with specific amounts.**
+
+Write in the following format (ALL in Korean, NO English):
+
+# 돼지 등심 사과 처트니 구이
+
+## 재료
+주재료: 돼지 등심 스테이크용(약 2cm 두께) 300~400g
+밑간: 소금, 후추, 올리브오일 약간
+사과 처트니 소스: 사과 1개(작게 다짐), 양파 1/2개(다짐), 설탕 2큰술, 식초 1큰술, 생강 1작은술(다짐), 계피가루 약간
+채소: 감자 2개, 당근 1개
+기타: 버터 1큰술, 다진 마늘 1작은술
+
+## 조리 방법
+1. 돼지 등심에 소금, 후추, 올리브오일을 발라 30분 재워둡니다.
+2. 사과 처트니 소스를 만들기 위해 사과, 양파, 설탕, 식초, 생강을 넣고 약한 불에서 졸입니다.
+3. 팬에 버터를 녹이고 돼지 등심을 앞뒤로 노릇하게 굽습니다.
+4. 구운 고기를 접시에 담고 사과 처트니 소스를 올려 완성합니다.
+
+## 팁
+- 고기를 너무 오래 구우면 질겨지니 중간 불에서 빠르게 구워주세요.
+
+CRITICAL FORMATTING RULES:
+1. Recipe title: Write ONLY in Korean. Example: "# 돼지 등심 사과 처트니 구이" - DO NOT add English like "(Pan-Seared Pork Loin with Apple Chutney)"
+2. Section headers: Use ONLY Korean - "## 재료", "## 조리 방법", "## 팁" - NOT "재료 (Ingredients)" or "Cooking Steps"
+3. Write ALL content in Korean only - no English translations anywhere
+4. Follow the exact format above with all sections: 재료, 조리 방법, 팁"""
+    fallback = f"부위: {display_name}"
+    recipe_text = _call_llm_recipe(prompt, fallback)
+    if not recipe_text.strip():
+        recipe_text = f"# {display_name} 레시피\n\n부위: {display_name}\n\n레시피를 생성하려면 .env에 GEMINI_API_KEY를 설정해주세요."
+    return LLMRecipeResponse(recipe=recipe_text)
+
+
+@router.post(
+    "/recipe/save",
+    response_model=SavedRecipeResponse,
+    summary="레시피 저장",
+    responses={401: {"description": "인증 필요"}},
+)
+async def save_recipe(
+    body: SaveRecipeRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    member: Annotated[Member, Depends(get_current_user)],
+):
+    """레시피를 저장합니다."""
+    try:
+        # RecipeSource enum 검증
+        source_enum = RecipeSource(body.source)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid source: {body.source}. Must be one of: {[e.value for e in RecipeSource]}"
+        )
+    
+    saved_recipe = SavedRecipe(
+        member_id=member.id,
+        title=body.title,
+        content=body.content,
+        source=source_enum,
+        used_meats=body.used_meats,
+    )
+    db.add(saved_recipe)
+    await db.flush()
+    await db.refresh(saved_recipe)
+    
+    return SavedRecipeResponse(
+        id=saved_recipe.id,
+        title=saved_recipe.title,
+        content=saved_recipe.content,
+        source=saved_recipe.source.value,
+        used_meats=saved_recipe.used_meats,
+        created_at=saved_recipe.created_at,
+        updated_at=saved_recipe.updated_at,
+    )
+
+
+@router.get(
+    "/recipe/saved",
+    response_model=RecipeListResponse,
+    summary="저장된 레시피 목록 조회",
+    responses={401: {"description": "인증 필요"}},
+)
+async def get_saved_recipes(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    member: Annotated[Member, Depends(get_current_user)],
+):
+    """저장된 레시피 목록을 조회합니다."""
+    q = (
+        select(SavedRecipe)
+        .where(SavedRecipe.member_id == member.id)
+        .order_by(SavedRecipe.created_at.desc())
+    )
+    result = await db.execute(q)
+    recipes = result.scalars().all()
+    
+    return RecipeListResponse(
+        recipes=[
+            SavedRecipeResponse(
+                id=r.id,
+                title=r.title,
+                content=r.content,
+                source=r.source.value,
+                used_meats=r.used_meats,
+                created_at=r.created_at,
+                updated_at=r.updated_at,
+            )
+            for r in recipes
+        ]
+    )
+
+
+@router.delete(
+    "/recipe/saved/{recipe_id}",
+    summary="저장된 레시피 삭제",
+    responses={401: {"description": "인증 필요"}, 404: {"description": "레시피를 찾을 수 없음"}},
+)
+async def delete_saved_recipe(
+    recipe_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    member: Annotated[Member, Depends(get_current_user)],
+):
+    """저장된 레시피를 삭제합니다."""
+    q = (
+        select(SavedRecipe)
+        .where(SavedRecipe.id == recipe_id)
+        .where(SavedRecipe.member_id == member.id)
+    )
+    result = await db.execute(q)
+    recipe = result.scalar_one_or_none()
+    
+    if not recipe:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="레시피를 찾을 수 없습니다."
+        )
+    
+    await db.delete(recipe)
+    await db.flush()
+    
+    return {"success": True, "message": "레시피가 삭제되었습니다."}
