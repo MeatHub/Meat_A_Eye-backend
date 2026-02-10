@@ -133,93 +133,28 @@ CREATE TABLE web_notifications (
   FOREIGN KEY (fridge_item_id) REFERENCES fridge_items(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
--- 소고기 (beef) 10개
+-- meat_info: AI·백엔드와 동일한 영문 part_name 17개만 (한글 INSERT 없음 → 중복 방지)
+-- 소 10 + 돼지 7
 INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guide) VALUES
-('안심', 'beef', 200, 22.0, 11.0, '냉장 5일, 냉동 6개월'),
-('등심', 'beef', 240, 19.0, 17.0, '냉장 5일, 냉동 6개월'),
-('채끝', 'beef', 230, 20.0, 15.0, '냉장 5일, 냉동 6개월'),
-('목심', 'beef', 250, 19.0, 18.0, '냉장 3일, 냉동 6개월'),
-('우둔', 'beef', 200, 22.0, 10.0, '냉장 5일, 냉동 6개월'),
-('설도', 'beef', 190, 21.0, 9.0, '냉장 5일, 냉동 6개월'),
-('양지', 'beef', 250, 18.0, 19.0, '냉장 3일, 냉동 6개월'),
-('사태', 'beef', 200, 20.0, 12.0, '냉장 3일, 냉동 6개월'),
-('갈비', 'beef', 280, 18.0, 22.0, '냉장 3일, 냉동 6개월'),
-('앞다리', 'beef', 220, 20.0, 14.0, '냉장 3일, 냉동 6개월');
-
--- 돼지고기 (pork) 7개
-INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guide) VALUES
-('안심', 'pork', 200, 22.0, 10.0, '냉장 3일, 냉동 3개월'),
-('등심', 'pork', 250, 20.0, 18.0, '냉장 3일, 냉동 3개월'),
-('목심', 'pork', 250, 18.0, 19.0, '냉장 3일, 냉동 3개월'),
-('앞다리', 'pork', 240, 19.0, 17.0, '냉장 3일, 냉동 3개월'),
-('뒷다리', 'pork', 220, 21.0, 13.0, '냉장 3일, 냉동 3개월'),
-('삼겹살', 'pork', 331, 17.0, 28.0, '냉장 3일, 냉동 3개월'),
-('갈비', 'pork', 270, 18.0, 20.0, '냉장 3일, 냉동 3개월');
+('Beef_Tenderloin', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('Beef_Ribeye', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('Beef_Sirloin', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('Beef_Chuck', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('Beef_Round', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('Beef_BottomRound', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('Beef_Brisket', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('Beef_Shank', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('Beef_Rib', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('Beef_Shoulder', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('Pork_Tenderloin', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_Loin', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_Neck', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_PicnicShoulder', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_Ham', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_Belly', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_Ribs', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월');
 
 select * from meat_nutrition;
-
--- 기존 데이터 삭제 후 재삽입
-DELETE FROM meat_info;
-
--- 소고기 (beef) 10개
-INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guide) VALUES
-('안심', 'beef', 200, 22.0, 11.0, '냉장 5일, 냉동 6개월'),
-('등심', 'beef', 240, 19.0, 17.0, '냉장 5일, 냉동 6개월'),
-('채끝', 'beef', 230, 20.0, 15.0, '냉장 5일, 냉동 6개월'),
-('목심', 'beef', 250, 19.0, 18.0, '냉장 3일, 냉동 6개월'),
-('우둔', 'beef', 200, 22.0, 10.0, '냉장 5일, 냉동 6개월'),
-('설도', 'beef', 190, 21.0, 9.0, '냉장 5일, 냉동 6개월'),
-('양지', 'beef', 250, 18.0, 19.0, '냉장 3일, 냉동 6개월'),
-('사태', 'beef', 200, 20.0, 12.0, '냉장 3일, 냉동 6개월'),
-('갈비', 'beef', 280, 18.0, 22.0, '냉장 3일, 냉동 6개월'),
-('앞다리', 'beef', 220, 20.0, 14.0, '냉장 3일, 냉동 6개월');
-
--- 돼지고기 (pork) 7개
-INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guide) VALUES
-('안심', 'pork', 200, 22.0, 10.0, '냉장 3일, 냉동 3개월'),
-('등심', 'pork', 250, 20.0, 18.0, '냉장 3일, 냉동 3개월'),
-('목심', 'pork', 250, 18.0, 19.0, '냉장 3일, 냉동 3개월'),
-('앞다리', 'pork', 240, 19.0, 17.0, '냉장 3일, 냉동 3개월'),
-('뒷다리', 'pork', 220, 21.0, 13.0, '냉장 3일, 냉동 3개월'),
-('삼겹살', 'pork', 331, 17.0, 28.0, '냉장 3일, 냉동 3개월'),
-('갈비', 'pork', 270, 18.0, 20.0, '냉장 3일, 냉동 3개월');
-
-select * from meat_info;
-
--- 1. 외래 키 체크 비활성화
-SET FOREIGN_KEY_CHECKS = 0;
-
--- 2. 기존 데이터 삭제
-DELETE FROM meat_info;
-
--- 3. 새로운 데이터 삽입 (소고기 10개 + 돼지고기 7개)
--- 영양정보는 API로 호출하므로 NULL로 설정
--- 소고기 (beef) 10개
-INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guide) VALUES
-('안심', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
-('등심', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
-('채끝', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
-('목심', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
-('우둔', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
-('설도', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
-('양지', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
-('사태', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
-('갈비', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
-('앞다리', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월');
-
--- 돼지고기 (pork) 7개
-INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guide) VALUES
-('안심', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
-('등심', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
-('목심', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
-('앞다리', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
-('뒷다리', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
-('삼겹살', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
-('갈비', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월');
-
--- 4. 외래 키 체크 재활성화
-SET FOREIGN_KEY_CHECKS = 1;
-
 
 -- fridge_items에 meat_info_id가 있지만 meat_info 테이블에 해당 ID가 없는 경우 확인
 SELECT fi.id, fi.meat_info_id, fi.member_id
@@ -231,9 +166,6 @@ WHERE mi.id IS NULL;
 SELECT id, meat_info_id, member_id
 FROM fridge_items
 WHERE meat_info_id = 0 OR meat_info_id IS NULL;
-
-select * from meat_info;
-
 
 -- saved_recipes 테이블 생성
 CREATE TABLE IF NOT EXISTS saved_recipes (

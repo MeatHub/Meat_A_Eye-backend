@@ -86,11 +86,9 @@ async def get_dashboard_prices(
         ("Pork_Ribs", "돼지/갈비"),
     ]
     
-    # 수입 소고기 기본 부위 목록 (갈비, 갈비살 - 미국산/호주산)
+    # 수입 소고기 기본 부위 목록 (갈비, 갈비살 - 호주산만)
     default_import_beef_parts = [
-        ("Import_Beef_Rib_US", "수입 소고기/갈비 - 미국산"),
         ("Import_Beef_Rib_AU", "수입 소고기/갈비 - 호주산"),
-        ("Import_Beef_Ribeye_US", "수입 소고기/갈비살 - 미국산"),
         ("Import_Beef_Ribeye_AU", "수입 소고기/갈비살 - 호주산"),
     ]
     
@@ -112,9 +110,7 @@ async def get_dashboard_prices(
         "Beef_Brisket": "소/양지",
         "Beef_Shank": "소/사태",
         "Beef_Rib": "소/갈비",
-        "Import_Beef_Rib_US": "수입 소고기/갈비 - 미국산",
         "Import_Beef_Rib_AU": "수입 소고기/갈비 - 호주산",
-        "Import_Beef_Ribeye_US": "수입 소고기/갈비살 - 미국산",
         "Import_Beef_Ribeye_AU": "수입 소고기/갈비살 - 호주산",
     }
     pork_part_map = {
@@ -344,9 +340,7 @@ async def get_dashboard_price_history(
         "Import_Beef_Brisket_US": "수입 소고기/양지(냉장) - 미국산",
         "Import_Beef_Brisket_AU": "수입 소고기/양지(냉장) - 호주산",
         "Import_Beef_Rib": "수입 소고기/갈비",
-        "Import_Beef_Rib_US": "수입 소고기/갈비 - 미국산",
         "Import_Beef_Rib_AU": "수입 소고기/갈비 - 호주산",
-        "Import_Beef_Ribeye_US": "수입 소고기/갈비살 - 미국산",
         "Import_Beef_Ribeye_AU": "수입 소고기/갈비살 - 호주산",
         "Import_Beef_ChuckEye_US": "수입 소고기/척아이롤(냉장) - 미국산",
         "Import_Beef_ChuckEye_AU": "수입 소고기/척아이롤(냉장) - 호주산",
@@ -545,12 +539,12 @@ async def get_dashboard_price_history_check():
             "message": "KAMIS API 키가 설정되지 않았습니다.",
         }
     
-    # 실제 API 호출로 연결 확인 (소/등심으로 테스트)
+    # 실제 API 호출로 연결 확인 (소/등심 1+등급으로 단일 등급 조회 - "00"은 01/02/03 병합이라 실패 가능)
     try:
         test_data = await fetch_kamis_price_period(
             part_name="Beef_Ribeye",
             region="전국",
-            grade_code="00",
+            grade_code="02",  # 1+등급 단일 조회로 연결 여부 확인
             weeks=1,  # 최소한의 데이터만 요청
         )
         if test_data:

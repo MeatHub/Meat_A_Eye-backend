@@ -55,8 +55,9 @@ async def meat_info_list(
     category: str | None = Query(None, description="카테고리 필터 (beef/pork)"),
     db: Annotated[AsyncSession, Depends(get_db)] = ...,
 ):
-    """고기 부위 목록을 반환합니다. 냉장고 아이템 수정 시 부위 선택에 사용됩니다."""
-    q = select(MeatInfo)
+    """고기 부위 목록을 반환합니다. 냉장고 아이템 수정 시 부위 선택에 사용됩니다.
+    part_name이 17개 영문만 반환 (DB에 한글·영문 혼재 시 중복 방지)."""
+    q = select(MeatInfo).where(MeatInfo.part_name.in_(apis.MEAT_INFO_PART_NAMES))
     if category:
         q = q.where(MeatInfo.category == category)
     q = q.order_by(MeatInfo.category, MeatInfo.part_name)
@@ -66,6 +67,7 @@ async def meat_info_list(
         MeatInfoResponse(
             id=r.id,
             name=r.part_name,
+            displayName=apis.get_part_display_name(r.part_name) or r.part_name,
             category=r.category,
             calories=r.calories,
             protein=float(r.protein) if r.protein else None,
@@ -119,6 +121,7 @@ async def meat_info(
     return MeatInfoResponse(
         id=row.id,
         name=row.part_name,
+        displayName=apis.get_part_display_name(row.part_name) or row.part_name,
         category=row.category,
         calories=cal,
         protein=prot,
@@ -141,19 +144,39 @@ async def meat_info_by_part_name(
 ):
     """
     AI가 판별한 부위명으로 영양정보와 가격정보를 통합 조회.
-    
-    - 영양정보: 식품의약품안전처 API
-    - 가격정보: KAMIS API (캐시 지원)
+    가격은 '가격 제공 부위'(소 5, 돼지 4, 수입 소·돼지)와 일치할 때만 조회하며,
+    나머지 17부위는 가격 없음(0)으로 반환 → UI에서 "가격정보를 제공하지 않습니다" 표시.
     """
     # 1. 영양정보 조회
     nutrition_data = await nutrition_service.fetch_nutrition(part_name, db=db)
     
-    # 2. 가격정보 조회 (DB 캐시 포함)
-    price_data = await price_service.fetch_current_price(
-        part_name=part_name,
-        region=region,
-        db=db,
-    )
+    # 2. 가격정보: 가격 제공 부위일 때만 KAMIS 조회, 아니면 0 반환
+    price_data: dict = {
+        "currentPrice": 0,
+        "unit": "100g",
+        "trend": "flat",
+        "price_date": None,
+        "source": "unavailable",
+        "gradePrices": [],
+    }
+    if part_name in apis.PRICE_AVAILABLE_PARTS:
+        try:
+            price_data = await price_service.fetch_current_price(
+                part_name=part_name,
+                region=region,
+                db=db,
+            )
+            price_data = dict(price_data)
+            price_data.setdefault("gradePrices", [])
+        except (HTTPException, Exception):
+            price_data = {
+                "currentPrice": 0,
+                "unit": "100g",
+                "trend": "flat",
+                "price_date": None,
+                "source": "unavailable",
+                "gradePrices": [],
+            }
     
     # 3. DB에서 기본 정보 조회 (선택)
     meat_info_record = None
@@ -181,8 +204,10 @@ async def meat_info_by_part_name(
         else default_nutrition.get("fat")
     )
     
+    display_name = apis.get_part_display_name(part_name) or part_name
     return MeatInfoByPartNameResponse(
         partName=part_name,
+        displayName=display_name,
         calories=calories,
         protein=protein,
         fat=fat,

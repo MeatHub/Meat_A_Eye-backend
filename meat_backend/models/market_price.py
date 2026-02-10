@@ -14,6 +14,7 @@ class MarketPrice(Base):
     current_price: Mapped[int] = mapped_column(Integer, nullable=False)
     price_date: Mapped[date] = mapped_column(Date, nullable=False)
     region: Mapped[str] = mapped_column(String(50), nullable=False)
+    grade_code: Mapped[str] = mapped_column(String(10), nullable=False, default="")
 
 
 class MarketPriceHistory(Base):

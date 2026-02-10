@@ -193,29 +193,25 @@ CREATE TABLE web_notifications (
 -- 초기 데이터 삽입 (옵션)
 -- ============================================================
 
--- 고기 부위 샘플 데이터
--- 소고기 (beef) 10개
+-- 고기 부위: AI·백엔드와 동일한 영문 part_name 17개만 (한글 중복 방지)
 INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guide) VALUES
-('안심', 'beef', 200, 22.0, 11.0, '냉장 5일, 냉동 6개월'),
-('등심', 'beef', 240, 19.0, 17.0, '냉장 5일, 냉동 6개월'),
-('채끝', 'beef', 230, 20.0, 15.0, '냉장 5일, 냉동 6개월'),
-('목심', 'beef', 250, 19.0, 18.0, '냉장 3일, 냉동 6개월'),
-('우둔', 'beef', 200, 22.0, 10.0, '냉장 5일, 냉동 6개월'),
-('설도', 'beef', 190, 21.0, 9.0, '냉장 5일, 냉동 6개월'),
-('양지', 'beef', 250, 18.0, 19.0, '냉장 3일, 냉동 6개월'),
-('사태', 'beef', 200, 20.0, 12.0, '냉장 3일, 냉동 6개월'),
-('갈비', 'beef', 280, 18.0, 22.0, '냉장 3일, 냉동 6개월'),
-('앞다리', 'beef', 220, 20.0, 14.0, '냉장 3일, 냉동 6개월');
-
--- 돼지고기 (pork) 7개
-INSERT INTO meat_info (part_name, category, calories, protein, fat, storage_guide) VALUES
-('안심', 'pork', 200, 22.0, 10.0, '냉장 3일, 냉동 3개월'),
-('등심', 'pork', 250, 20.0, 18.0, '냉장 3일, 냉동 3개월'),
-('목심', 'pork', 250, 18.0, 19.0, '냉장 3일, 냉동 3개월'),
-('앞다리', 'pork', 240, 19.0, 17.0, '냉장 3일, 냉동 3개월'),
-('뒷다리', 'pork', 220, 21.0, 13.0, '냉장 3일, 냉동 3개월'),
-('삼겹살', 'pork', 331, 17.0, 28.0, '냉장 3일, 냉동 3개월'),
-('갈비', 'pork', 270, 18.0, 20.0, '냉장 3일, 냉동 3개월');
+('Beef_Tenderloin', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('Beef_Ribeye', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('Beef_Sirloin', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('Beef_Chuck', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('Beef_Round', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('Beef_BottomRound', 'beef', NULL, NULL, NULL, '냉장 5일, 냉동 6개월'),
+('Beef_Brisket', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('Beef_Shank', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('Beef_Rib', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('Beef_Shoulder', 'beef', NULL, NULL, NULL, '냉장 3일, 냉동 6개월'),
+('Pork_Tenderloin', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_Loin', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_Neck', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_PicnicShoulder', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_Ham', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_Belly', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월'),
+('Pork_Ribs', 'pork', NULL, NULL, NULL, '냉장 3일, 냉동 3개월');
 
 -- ============================================================
 -- 데이터베이스 스키마 정보
