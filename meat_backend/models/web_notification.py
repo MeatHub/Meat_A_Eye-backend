@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import BigInteger, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..config.database import Base
+from ..config.timezone import now_kst
 
 
 class WebNotification(Base):
@@ -17,7 +18,7 @@ class WebNotification(Base):
     scheduled_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_kst)
 
     member = relationship("Member", back_populates="web_notifications")
     fridge_item = relationship("FridgeItem", back_populates="web_notifications")

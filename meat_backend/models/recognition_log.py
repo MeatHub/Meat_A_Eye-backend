@@ -4,6 +4,7 @@ from decimal import Decimal
 from sqlalchemy import BigInteger, String, DateTime, Numeric, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..config.database import Base
+from ..config.timezone import now_kst
 
 
 class RecognitionLog(Base):
@@ -16,6 +17,6 @@ class RecognitionLog(Base):
     confidence_score: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
     illuminance_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     browser_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_kst)
 
     member = relationship("Member", back_populates="recognition_logs")

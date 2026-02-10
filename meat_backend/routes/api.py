@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config.database import get_db
 from ..config.settings import settings
+from ..config.timezone import now_kst
 from ..models.member import Member
 from ..models.recognition_log import RecognitionLog
 from ..models.fridge_item import FridgeItem
@@ -359,7 +360,7 @@ async def api_analyze(
     # 로그인한 사용자 또는 게스트인 경우 로그 및 냉장고 저장
     if member:
         # recognition_logs에 저장
-        recognition_date = datetime.utcnow()
+        recognition_date = now_kst()
         log = RecognitionLog(
             member_id=member.id,
             image_url=filename,

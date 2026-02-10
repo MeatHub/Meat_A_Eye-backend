@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import BigInteger, String, DateTime, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..config.database import Base
+from ..config.timezone import now_kst
 
 
 class Member(Base):
@@ -15,7 +16,7 @@ class Member(Base):
     web_push_subscription: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_guest: Mapped[bool] = mapped_column(default=False, nullable=False)
     guest_id: Mapped[str | None] = mapped_column(String(36), nullable=True, unique=True)  # UUID
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_kst)
 
     recognition_logs = relationship("RecognitionLog", back_populates="member", cascade="all, delete-orphan")
     fridge_items = relationship("FridgeItem", back_populates="member", cascade="all, delete-orphan")

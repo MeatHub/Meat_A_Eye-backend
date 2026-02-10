@@ -27,7 +27,8 @@ class Settings(BaseSettings):
     # CORS (프론트엔드)
     cors_origins: str = "http://localhost:3000,https://meat-a-eye.com,https://meat-a-eye.vercel.app"
 
-    # AI 서버 (중계용)
+    # AI 서버 (Vision/OCR 중계) — 환경변수 AI_SERVER_URL
+    # 예: http://localhost:8001 (Meat_A_Eye-aimodels/ai-server 실행 포트)
     ai_server_url: str = "http://localhost:8001"
 
     # KAMIS / 식품영양정보 / 축산물이력제 (공공 API)

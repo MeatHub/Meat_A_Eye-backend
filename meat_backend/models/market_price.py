@@ -3,6 +3,7 @@ from datetime import date, datetime
 from sqlalchemy import BigInteger, String, Integer, Date, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 from ..config.database import Base
+from ..config.timezone import now_kst
 
 
 class MarketPrice(Base):
@@ -24,4 +25,4 @@ class MarketPriceHistory(Base):
     price_date: Mapped[date] = mapped_column(Date, nullable=False)
     region: Mapped[str] = mapped_column(String(50), nullable=False)
     source: Mapped[str | None] = mapped_column(String(50), nullable=True, default="KAMIS")
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_kst)

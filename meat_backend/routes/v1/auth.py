@@ -1,5 +1,7 @@
 """AUTH-01~04: 회원가입, 로그인, 게스트 체험, 웹 푸시 구독."""
 from datetime import datetime
+
+from ...config.timezone import now_kst
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -217,4 +219,4 @@ async def web_push_subscribe(
     )
     db.add(sub)
     await db.flush()
-    return WebPushSubscribeResponse(success=True, savedAt=datetime.utcnow())
+    return WebPushSubscribeResponse(success=True, savedAt=now_kst())

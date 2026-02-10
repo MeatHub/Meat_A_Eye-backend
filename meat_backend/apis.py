@@ -228,12 +228,44 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "grades": ["1++등급", "1+등급", "1등급", "일반"],
         "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"},
     },
-    # 돼지(국내) - itemcode 4304
-    "Pork_Shoulder": {
+    # 돼지(국내) 7부위 - AI 학습·DB와 동일한 클래스명 (itemcode 4304)
+    "Pork_Tenderloin": {
+        "itemcode": "4304",
+        "kindcode": "21",
+        "category": "500",
+        "food_nm": "돼지/안심",
+        "grades": ["일반"],
+        "grade_codes": {"00": "전체"},
+    },
+    "Pork_Loin": {
+        "itemcode": "4304",
+        "kindcode": "68",
+        "category": "500",
+        "food_nm": "돼지/등심",
+        "grades": ["일반"],
+        "grade_codes": {"00": "전체"},
+    },
+    "Pork_Neck": {
+        "itemcode": "4304",
+        "kindcode": "24",
+        "category": "500",
+        "food_nm": "돼지/목심",
+        "grades": ["일반"],
+        "grade_codes": {"00": "전체"},
+    },
+    "Pork_PicnicShoulder": {
         "itemcode": "4304",
         "kindcode": "25",
         "category": "500",
         "food_nm": "돼지/앞다리",
+        "grades": ["일반"],
+        "grade_codes": {"00": "전체"},
+    },
+    "Pork_Ham": {
+        "itemcode": "4304",
+        "kindcode": "29",
+        "category": "500",
+        "food_nm": "돼지/뒷다리",
         "grades": ["일반"],
         "grade_codes": {"00": "전체"},
     },
@@ -245,19 +277,11 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "grades": ["일반"],
         "grade_codes": {"00": "전체"},
     },
-    "Pork_Rib": {
+    "Pork_Ribs": {
         "itemcode": "4304",
         "kindcode": "28",
         "category": "500",
         "food_nm": "돼지/갈비",
-        "grades": ["일반"],
-        "grade_codes": {"00": "전체"},
-    },
-    "Pork_Loin": {
-        "itemcode": "4304",
-        "kindcode": "68",
-        "category": "500",
-        "food_nm": "돼지/목심",
         "grades": ["일반"],
         "grade_codes": {"00": "전체"},
     },
@@ -304,6 +328,40 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "grade_codes": {"00": "전체"},
     },
 }
+
+# 레거시/다른 class_name → 17개 표준 부위명 매핑 (AI가 17개 외 이름을 보낼 때만 사용)
+# 17개 표준: 소 10 (Beef_Tenderloin, Beef_Ribeye, Beef_Sirloin, Beef_Chuck, Beef_Round, Beef_BottomRound, Beef_Brisket, Beef_Shank, Beef_Rib, Beef_Shoulder) + 돼지 7 (Pork_Tenderloin, Pork_Loin, Pork_Neck, Pork_PicnicShoulder, Pork_Ham, Pork_Belly, Pork_Ribs)
+AI_PART_TO_BACKEND: dict[str, str] = {
+    # 구 부위명/오타 → 17개 표준
+    "Pork_Rib": "Pork_Ribs",
+    "Pork_Shoulder": "Pork_PicnicShoulder",
+    "FrontLeg": "Pork_PicnicShoulder",
+    "front_leg": "Pork_PicnicShoulder",
+    "PorkBelly": "Pork_Belly",
+    "pork_belly": "Pork_Belly",
+    "pork_shoulder": "Pork_PicnicShoulder",
+    "Sirloin": "Beef_Sirloin",
+    "sirloin": "Beef_Sirloin",
+    "Tenderloin": "Beef_Tenderloin",
+    "tenderloin": "Beef_Tenderloin",
+    "Ribs": "Beef_Rib",
+    "ribs": "Beef_Rib",
+    "Striploin": "Beef_Sirloin",
+    "striploin": "Beef_Sirloin",
+    "RearLeg": "Pork_Ham",
+    "rear_leg": "Pork_Ham",
+    "Brisket": "Beef_Brisket",
+    "brisket": "Beef_Brisket",
+    "Pork_Jowl": "Pork_Neck",
+    "pork_jowl": "Pork_Neck",
+}
+
+
+def map_ai_part_to_backend(ai_class_name: str | None) -> str | None:
+    """AI 서버 class_name을 백엔드 부위명(PART_TO_CODES 키)으로 변환."""
+    if not ai_class_name or not (s := (ai_class_name or "").strip()):
+        return ai_class_name
+    return AI_PART_TO_BACKEND.get(s) or AI_PART_TO_BACKEND.get(s.replace(" ", "_")) or s
 
 
 def _get_codes(part_name: str) -> dict[str, Any]:
@@ -1526,8 +1584,12 @@ async def fetch_ai_analyze(image_bytes: bytes, filename: str = "image.jpg", mode
     if mode == "vision":
         part = result.get("class_name")
         if part:
+            part_mapped = map_ai_part_to_backend(part) or part
+            if part_mapped != part:
+                logger.info("AI class_name 매핑: %s -> %s", part, part_mapped)
+            part = part_mapped
             codes = _get_codes(part)
-            logger.info("AI class_name=%s -> kamis_code=%s category=%s", part, codes.get("kamis_code"), codes.get("category"))
+            logger.info("AI class_name=%s -> itemcode=%s category=%s", part, codes.get("itemcode"), codes.get("category"))
         return {
             "partName": part,
             "confidence": result.get("confidence"),

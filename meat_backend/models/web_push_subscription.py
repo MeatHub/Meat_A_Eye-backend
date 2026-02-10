@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import BigInteger, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..config.database import Base
+from ..config.timezone import now_kst
 
 
 class WebPushSubscription(Base):
@@ -14,6 +15,6 @@ class WebPushSubscription(Base):
     p256dh_key: Mapped[str] = mapped_column(Text, nullable=False)
     auth_key: Mapped[str] = mapped_column(Text, nullable=False)
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_kst)
 
     member = relationship("Member")

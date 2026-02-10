@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import BigInteger, String, Text, DateTime, ForeignKey, Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from ..config.database import Base
+from ..config.timezone import now_kst
 import enum
 
 
@@ -29,7 +30,7 @@ class SavedRecipe(Base):
     used_meats: Mapped[str | None] = mapped_column(Text, nullable=True, comment="사용된 고기 목록 (JSON)")
     
     # 메타 정보
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_kst)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_kst, onupdate=now_kst)
 
     member = relationship("Member", back_populates="saved_recipes")

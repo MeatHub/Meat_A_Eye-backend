@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from ...config.database import get_db
 from ...config.settings import settings as app_settings
+from ...config.timezone import now_kst
 from ...models.member import Member
 from ...models.recognition_log import RecognitionLog
 from ...models.fridge_item import FridgeItem
@@ -88,7 +89,7 @@ async def ai_analyze(
     history_no = out.get("historyNo")
 
     # recognition_logs에 저장
-    recognition_date = datetime.utcnow()
+    recognition_date = now_kst()
     log = RecognitionLog(
         member_id=member.id,
         image_url=filename,  # 실제로는 업로드된 이미지 URL이어야 함

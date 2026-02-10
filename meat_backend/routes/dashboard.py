@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from ..apis import fetch_kamis_price_period
 from ..config.database import get_db
+from ..config.timezone import now_kst
 from ..models.recognition_log import RecognitionLog
 from ..services.price_service import PriceService
 
@@ -76,10 +77,13 @@ async def get_dashboard_prices(
     # 여기서는 특정 부위가 지정되지 않았을 때만 사용됨 (실제로는 사용되지 않음)
     default_beef_parts = [("Beef_Ribeye", "소/등심"), ("Beef_Rib", "소/갈비")]
     default_pork_parts = [
-        ("Pork_Shoulder", "돼지/앞다리"),
+        ("Pork_Tenderloin", "돼지/안심"),
+        ("Pork_Loin", "돼지/등심"),
+        ("Pork_Neck", "돼지/목심"),
+        ("Pork_PicnicShoulder", "돼지/앞다리"),
+        ("Pork_Ham", "돼지/뒷다리"),
         ("Pork_Belly", "돼지/삼겹살"),
-        ("Pork_Rib", "돼지/갈비"),
-        ("Pork_Loin", "돼지/목심"),
+        ("Pork_Ribs", "돼지/갈비"),
     ]
     
     # 수입 소고기 기본 부위 목록 (갈비, 갈비살 - 미국산/호주산)
@@ -98,24 +102,30 @@ async def get_dashboard_prices(
     #                    돼지/앞다리, 돼지/삼겹살, 돼지/갈비, 돼지/목심
     #                    수입 소고기/양지, 수입 소고기/갈비 등
     beef_part_map = {
-        "Beef_Tenderloin": "소/안심",  # itemcode 4301, kindcode 21
-        "Beef_Ribeye": "소/등심",      # itemcode 4301, kindcode 22
-        "Beef_BottomRound": "소/설도",  # itemcode 4301, kindcode 36
-        "Beef_Brisket": "소/양지",     # itemcode 4301, kindcode 40
-        "Beef_Rib": "소/갈비",         # itemcode 4301, kindcode 50
-        # 수입 소고기 (갈비, 갈비살만 유지 - 호주산/미국산만)
-        "Import_Beef_Rib_US": "수입 소고기/갈비 - 미국산",  # itemcode 4401, kindcode 31, 등급 81
-        "Import_Beef_Rib_AU": "수입 소고기/갈비 - 호주산",  # itemcode 4401, kindcode 31, 등급 82
-        "Import_Beef_Ribeye_US": "수입 소고기/갈비살 - 미국산",  # itemcode 4401, kindcode 37, 등급 81
-        "Import_Beef_Ribeye_AU": "수입 소고기/갈비살 - 호주산",  # itemcode 4401, kindcode 37, 등급 82
+        "Beef_Tenderloin": "소/안심",
+        "Beef_Ribeye": "소/등심",
+        "Beef_Sirloin": "소/채끝",
+        "Beef_Chuck": "소/목심",
+        "Beef_Shoulder": "소/앞다리",
+        "Beef_Round": "소/우둔",
+        "Beef_BottomRound": "소/설도",
+        "Beef_Brisket": "소/양지",
+        "Beef_Shank": "소/사태",
+        "Beef_Rib": "소/갈비",
+        "Import_Beef_Rib_US": "수입 소고기/갈비 - 미국산",
+        "Import_Beef_Rib_AU": "수입 소고기/갈비 - 호주산",
+        "Import_Beef_Ribeye_US": "수입 소고기/갈비살 - 미국산",
+        "Import_Beef_Ribeye_AU": "수입 소고기/갈비살 - 호주산",
     }
     pork_part_map = {
-        "Pork_Shoulder": "돼지/앞다리",  # itemcode 4304, kindcode 25
-        "Pork_Belly": "돼지/삼겹살",    # itemcode 4304, kindcode 27
-        "Pork_Rib": "돼지/갈비",        # itemcode 4304, kindcode 28
-        "Pork_Loin": "돼지/목심",       # itemcode 4304, kindcode 68
-        # 수입 돼지고기
-        "Import_Pork_Belly": "수입 돼지고기/삼겹살",  # itemcode 4402, kindcode 27
+        "Pork_Tenderloin": "돼지/안심",
+        "Pork_Loin": "돼지/등심",
+        "Pork_Neck": "돼지/목심",
+        "Pork_PicnicShoulder": "돼지/앞다리",
+        "Pork_Ham": "돼지/뒷다리",
+        "Pork_Belly": "돼지/삼겹살",
+        "Pork_Ribs": "돼지/갈비",
+        "Import_Pork_Belly": "수입 돼지고기/삼겹살",
     }
     
     # 부위 필터링 로직:
@@ -344,11 +354,13 @@ async def get_dashboard_price_history(
         "Import_Beef_ChuckEye_Frozen_AU": "수입 소고기/척아이롤(냉동) - 호주산",
     }
     pork_part_map = {
-        "Pork_Shoulder": "돼지/앞다리",
+        "Pork_Tenderloin": "돼지/안심",
+        "Pork_Loin": "돼지/등심",
+        "Pork_Neck": "돼지/목심",
+        "Pork_PicnicShoulder": "돼지/앞다리",
+        "Pork_Ham": "돼지/뒷다리",
         "Pork_Belly": "돼지/삼겹살",
-        "Pork_Rib": "돼지/갈비",
-        "Pork_Loin": "돼지/목심",
-        # 수입 돼지고기
+        "Pork_Ribs": "돼지/갈비",
         "Import_Pork_Belly": "수입 돼지고기/삼겹살",
     }
     default_beef = [("Beef_Ribeye", "소/등심")]
@@ -435,8 +447,8 @@ async def get_popular_cuts(
     - trend: 전주 대비 증가율 (예: "+12%")
     - currentPrice: KAMIS API 가격 (캐시 사용)
     """
-    # 기준 날짜: 최근 7일
-    now = datetime.utcnow()
+    # 기준 날짜: 최근 7일 (한국 시간 기준)
+    now = now_kst()
     week_ago = now - timedelta(days=7)
     two_weeks_ago = now - timedelta(days=14)
     
