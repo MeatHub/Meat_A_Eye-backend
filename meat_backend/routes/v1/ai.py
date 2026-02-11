@@ -21,6 +21,7 @@ from ...models.fridge_item import FridgeItem
 from ...models.meat_info import MeatInfo
 from ...models.web_notification import WebNotification
 from ...models.saved_recipe import SavedRecipe, RecipeSource
+from ...models.recipe_bookmark import RecipeBookmark
 from ...schemas.ai import AIAnalyzeResponse, AIMode, NutritionInfo, PriceInfo, TraceabilityInfo
 from ...apis import AIProxyService
 from ...services.traceability import fetch_traceability
@@ -283,6 +284,11 @@ class SavedRecipeResponse(BaseModel):
     used_meats: str | None
     created_at: datetime
     updated_at: datetime
+    is_bookmarked: bool = False
+
+
+class BookmarkedIdsResponse(BaseModel):
+    bookmarked_ids: list[int]
 
 
 class RecipeListResponse(BaseModel):
@@ -715,6 +721,13 @@ async def get_saved_recipes(
     )
     result = await db.execute(q)
     recipes = result.scalars().all()
+    recipe_ids = [r.id for r in recipes]
+    bookmarked_q = select(RecipeBookmark.saved_recipe_id).where(
+        RecipeBookmark.member_id == member.id,
+        RecipeBookmark.saved_recipe_id.in_(recipe_ids),
+    )
+    bm_result = await db.execute(bookmarked_q)
+    bookmarked_set = set(bm_result.scalars().all())
     
     return RecipeListResponse(
         recipes=[
@@ -726,6 +739,7 @@ async def get_saved_recipes(
                 used_meats=r.used_meats,
                 created_at=r.created_at,
                 updated_at=r.updated_at,
+                is_bookmarked=r.id in bookmarked_set,
             )
             for r in recipes
         ]
@@ -761,3 +775,74 @@ async def delete_saved_recipe(
     await db.flush()
     
     return {"success": True, "message": "레시피가 삭제되었습니다."}
+
+
+@router.get(
+    "/recipe/bookmarks",
+    response_model=BookmarkedIdsResponse,
+    summary="즐겨찾기한 레시피 ID 목록",
+    responses={401: {"description": "인증 필요"}},
+)
+async def get_recipe_bookmarks(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    member: Annotated[Member, Depends(get_current_user)],
+):
+    """즐겨찾기한 저장 레시피 ID 목록을 반환합니다."""
+    q = select(RecipeBookmark.saved_recipe_id).where(RecipeBookmark.member_id == member.id)
+    result = await db.execute(q)
+    ids = list(result.scalars().all())
+    return BookmarkedIdsResponse(bookmarked_ids=ids)
+
+
+@router.post(
+    "/recipe/saved/{recipe_id}/bookmark",
+    status_code=status.HTTP_201_CREATED,
+    summary="레시피 즐겨찾기 추가",
+    responses={401: {"description": "인증 필요"}, 404: {"description": "레시피를 찾을 수 없음"}},
+)
+async def add_recipe_bookmark(
+    recipe_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    member: Annotated[Member, Depends(get_current_user)],
+):
+    """저장된 레시피를 즐겨찾기에 추가합니다."""
+    recipe_q = select(SavedRecipe).where(SavedRecipe.id == recipe_id, SavedRecipe.member_id == member.id)
+    r = await db.execute(recipe_q)
+    recipe = r.scalar_one_or_none()
+    if not recipe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="레시피를 찾을 수 없습니다.")
+    existing = await db.execute(
+        select(RecipeBookmark).where(
+            RecipeBookmark.member_id == member.id,
+            RecipeBookmark.saved_recipe_id == recipe_id,
+        )
+    )
+    if existing.scalar_one_or_none():
+        return {"success": True, "message": "이미 즐겨찾기에 있습니다."}
+    bookmark = RecipeBookmark(member_id=member.id, saved_recipe_id=recipe_id)
+    db.add(bookmark)
+    await db.flush()
+    return {"success": True, "message": "즐겨찾기에 추가되었습니다."}
+
+
+@router.delete(
+    "/recipe/saved/{recipe_id}/bookmark",
+    summary="레시피 즐겨찾기 해제",
+    responses={401: {"description": "인증 필요"}},
+)
+async def remove_recipe_bookmark(
+    recipe_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    member: Annotated[Member, Depends(get_current_user)],
+):
+    """저장된 레시피를 즐겨찾기에서 제거합니다."""
+    q = select(RecipeBookmark).where(
+        RecipeBookmark.member_id == member.id,
+        RecipeBookmark.saved_recipe_id == recipe_id,
+    )
+    result = await db.execute(q)
+    bookmark = result.scalar_one_or_none()
+    if bookmark:
+        await db.delete(bookmark)
+        await db.flush()
+    return {"success": True, "message": "즐겨찾기가 해제되었습니다."}

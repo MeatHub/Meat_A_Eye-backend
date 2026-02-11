@@ -34,3 +34,4 @@ class SavedRecipe(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_kst, onupdate=now_kst)
 
     member = relationship("Member", back_populates="saved_recipes")
+    bookmarks = relationship("RecipeBookmark", back_populates="saved_recipe", cascade="all, delete-orphan")
