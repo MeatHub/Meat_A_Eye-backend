@@ -109,10 +109,10 @@ async def fridge_add(
     member: Annotated[Member, Depends(get_current_user)],
 ):
     try:
-        if body.expiry_date < body.storage_date:
+        if body.expiryDate < body.storageDate:
             print("=" * 50)
             print(f"🚨 [REAL ERROR] Endpoint: /api/v1/fridge/item")
-            print(f"🚨 [DETAILS]: 날짜 검증 실패 - 만료일({body.expiry_date}) < 보관일({body.storage_date})")
+            print(f"🚨 [DETAILS]: 날짜 검증 실패 - 만료일({body.expiryDate}) < 보관일({body.storageDate})")
             print("=" * 50)
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="만료일은 보관일 이후여야 합니다")
         meat = await db.get(MeatInfo, body.meatId)
