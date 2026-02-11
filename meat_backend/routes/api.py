@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 async def api_analyze(
     request: Request,
     image: UploadFile = File(..., alias="image"),
-    mode: str = Form("vision", description="vision 또는 ocr"),
+    mode: str = Form("beef", description="beef(소) | pork(돼지) | ocr"),
     auto_add_fridge: bool = Form(True, description="인식 후 자동으로 냉장고에 추가"),
     guest_id: str | None = Form(None, description="게스트 세션 ID (게스트 모드용)"),
     db: Annotated[AsyncSession, Depends(get_db)] = ...,
@@ -109,9 +109,9 @@ async def api_analyze(
             detail="파일 크기 초과 (5MB 제한)"
         )
 
-    # mode 검증
-    if mode not in ("vision", "ocr"):
-        mode = "vision"
+    # mode 검증: 소(beef) | 돼지(pork) | OCR(ocr)
+    if mode not in ("beef", "pork", "ocr"):
+        mode = "beef"
 
     filename = image.filename or "image.jpg"
     

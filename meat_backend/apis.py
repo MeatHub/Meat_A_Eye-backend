@@ -1616,8 +1616,8 @@ class KamisService:
 class AIProxyService:
     """AI 서버 프록시 (apis.fetch_ai_analyze 래퍼)."""
     
-    async def analyze(self, image_bytes: bytes, *, filename: str = "image.jpg", mode: str = "vision") -> dict[str, Any]:
-        """AI 서버로 이미지 분석 요청."""
+    async def analyze(self, image_bytes: bytes, *, filename: str = "image.jpg", mode: str = "beef") -> dict[str, Any]:
+        """AI 서버로 이미지 분석 요청. mode: beef(소) | pork(돼지) | ocr"""
         return await fetch_ai_analyze(image_bytes, filename, mode)
 
 
@@ -1626,14 +1626,15 @@ class AIProxyService:
 # ---------------------------------------------------------------------------
 
 
-async def fetch_ai_analyze(image_bytes: bytes, filename: str = "image.jpg", mode: str = "vision") -> dict[str, Any]:
+async def fetch_ai_analyze(image_bytes: bytes, filename: str = "image.jpg", mode: str = "beef") -> dict[str, Any]:
+    """AI 서버 /ai/analyze 호출. mode: beef(소 10부위) | pork(돼지 7부위) | ocr"""
     base = (settings.ai_server_url or "").rstrip("/")
     if not base:
         raise HTTPException(status_code=503, detail="AI 서버 URL이 설정되지 않았습니다.")
 
-    endpoint = f"{base}/predict" if mode == "vision" else f"{base}/ai/analyze"
+    endpoint = f"{base}/ai/analyze"
     files = {"file": (filename, image_bytes, "image/jpeg")}
-    data = {"mode": "ocr"} if mode == "ocr" else None
+    data = {"mode": str(mode).strip().lower()}  # beef | pork | ocr
     print(f"DEBUG: REAL API REQUEST AI | URL: {endpoint} mode={mode}")
 
     try:
@@ -1653,7 +1654,8 @@ async def fetch_ai_analyze(image_bytes: bytes, filename: str = "image.jpg", mode
     if result.get("status") != "success":
         raise HTTPException(status_code=422, detail=result.get("message", "AI 분석 실패"))
 
-    if mode == "vision":
+    # 부위 판별(beef/pork) vs OCR 응답 분기
+    if mode in ("beef", "pork"):
         part = result.get("class_name")
         if part:
             part_mapped = map_ai_part_to_backend(part) or part
