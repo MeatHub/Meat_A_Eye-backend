@@ -106,7 +106,6 @@ async def get_dashboard_prices(
         "Beef_Chuck": "소/목심",
         "Beef_Shoulder": "소/앞다리",
         "Beef_Round": "소/우둔",
-        "Beef_BottomRound": "소/설도",
         "Beef_Brisket": "소/양지",
         "Beef_Shank": "소/사태",
         "Beef_Rib": "소/갈비",
@@ -333,7 +332,7 @@ async def get_dashboard_price_history(
     beef_part_map = {
         "Beef_Tenderloin": "소/안심",
         "Beef_Ribeye": "소/등심",
-        "Beef_BottomRound": "소/설도",
+        "Beef_Round": "소/우둔",
         "Beef_Brisket": "소/양지",
         "Beef_Rib": "소/갈비",
         # 수입 소고기

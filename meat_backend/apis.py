@@ -198,13 +198,6 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
         "category": "500",
         "food_nm": "소/우둔",
         "grades": ["1++등급", "1+등급", "1등급", "2등급", "3등급", "일반"],
-    },
-    "Beef_BottomRound": {
-        "itemcode": "4301",
-        "kindcode": "36",
-        "category": "500",
-        "food_nm": "소/설도",
-        "grades": ["1++등급", "1+등급", "1등급", "2등급", "3등급", "일반"],
         "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"},
     },
     "Beef_Brisket": {
@@ -315,10 +308,12 @@ PART_TO_CODES: dict[str, dict[str, Any]] = {
     },
 }
 
-# 레거시/다른 class_name → 17개 표준 부위명 매핑 (AI가 17개 외 이름을 보낼 때만 사용)
-# 17개 표준: 소 10 (Beef_Tenderloin, Beef_Ribeye, Beef_Sirloin, Beef_Chuck, Beef_Round, Beef_BottomRound, Beef_Brisket, Beef_Shank, Beef_Rib, Beef_Shoulder) + 돼지 7 (Pork_Tenderloin, Pork_Loin, Pork_Neck, Pork_PicnicShoulder, Pork_Ham, Pork_Belly, Pork_Ribs)
+# 레거시/다른 class_name → 16개 표준 부위명 매핑 (AI가 16개 외 이름을 보낼 때만 사용)
+# 16개 표준: 소 9 (Beef_Tenderloin, Beef_Ribeye, Beef_Sirloin, Beef_Chuck, Beef_Round, Beef_Brisket, Beef_Shank, Beef_Rib, Beef_Shoulder) + 돼지 7 (Pork_Tenderloin, Pork_Loin, Pork_Neck, Pork_PicnicShoulder, Pork_Ham, Pork_Belly, Pork_Ribs)
 AI_PART_TO_BACKEND: dict[str, str] = {
-    # 구 부위명/오타 → 17개 표준
+    # 병합된 부위 (설도 → 우둔)
+    "Beef_BottomRound": "Beef_Round",
+    # 구 부위명/오타 → 16개 표준
     "Pork_Rib": "Pork_Ribs",
     "Pork_Shoulder": "Pork_PicnicShoulder",
     "FrontLeg": "Pork_PicnicShoulder",
@@ -350,17 +345,17 @@ def map_ai_part_to_backend(ai_class_name: str | None) -> str | None:
     return AI_PART_TO_BACKEND.get(s) or AI_PART_TO_BACKEND.get(s.replace(" ", "_")) or s
 
 
-# meat_info 테이블·냉장고 부위 선택에 사용하는 17개 영문 부위 (한글 part_name 제외 시 중복 방지)
+# meat_info 테이블·냉장고 부위 선택에 사용하는 16개 영문 부위 (한글 part_name 제외 시 중복 방지)
 MEAT_INFO_PART_NAMES: frozenset[str] = frozenset({
     "Beef_Tenderloin", "Beef_Ribeye", "Beef_Sirloin", "Beef_Chuck", "Beef_Round",
-    "Beef_BottomRound", "Beef_Brisket", "Beef_Shank", "Beef_Rib", "Beef_Shoulder",
+    "Beef_Brisket", "Beef_Shank", "Beef_Rib", "Beef_Shoulder",
     "Pork_Tenderloin", "Pork_Loin", "Pork_Neck", "Pork_PicnicShoulder", "Pork_Ham",
     "Pork_Belly", "Pork_Ribs",
 })
 
 # 가격 API에 데이터가 있는 부위만 시세 조회 (아래 PRICE_KAMIS_CODES와 1:1 대응)
 PRICE_AVAILABLE_PARTS: frozenset[str] = frozenset({
-    "Beef_Tenderloin", "Beef_Ribeye", "Beef_BottomRound", "Beef_Brisket", "Beef_Rib",
+    "Beef_Tenderloin", "Beef_Ribeye", "Beef_Round", "Beef_Brisket", "Beef_Rib",
     "Pork_PicnicShoulder", "Pork_Belly", "Pork_Neck", "Pork_Ribs",
     "Import_Beef_Rib_AU", "Import_Beef_Ribeye_AU",
     "Import_Pork_Belly",
@@ -372,7 +367,7 @@ PRICE_AVAILABLE_PARTS: frozenset[str] = frozenset({
 PRICE_KAMIS_CODES: dict[str, dict[str, Any]] = {
     "Beef_Tenderloin": {"itemcode": "4301", "kindcode": "21", "category": "500", "food_nm": "소/안심", "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"}},
     "Beef_Ribeye": {"itemcode": "4301", "kindcode": "22", "category": "500", "food_nm": "소/등심", "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"}},
-    "Beef_BottomRound": {"itemcode": "4301", "kindcode": "36", "category": "500", "food_nm": "소/설도", "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"}},
+    "Beef_Round": {"itemcode": "4301", "kindcode": "36", "category": "500", "food_nm": "소/우둔", "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"}},
     "Beef_Brisket": {"itemcode": "4301", "kindcode": "40", "category": "500", "food_nm": "소/양지", "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"}},
     "Beef_Rib": {"itemcode": "4301", "kindcode": "50", "category": "500", "food_nm": "소/갈비", "grade_codes": {"00": "전체", "01": "1++등급", "02": "1+등급", "03": "1등급"}},
     "Pork_PicnicShoulder": {"itemcode": "4304", "kindcode": "25", "category": "500", "food_nm": "돼지/앞다리", "grade_codes": {"00": "전체"}},
@@ -1627,7 +1622,7 @@ class AIProxyService:
 
 
 async def fetch_ai_analyze(image_bytes: bytes, filename: str = "image.jpg", mode: str = "beef") -> dict[str, Any]:
-    """AI 서버 /ai/analyze 호출. mode: beef(소 10부위) | pork(돼지 7부위) | ocr"""
+    """AI 서버 /ai/analyze 호출. mode: beef(소 9부위) | pork(돼지 7부위) | ocr"""
     base = (settings.ai_server_url or "").rstrip("/")
     if not base:
         raise HTTPException(status_code=503, detail="AI 서버 URL이 설정되지 않았습니다.")
