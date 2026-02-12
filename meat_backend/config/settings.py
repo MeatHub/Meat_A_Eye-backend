@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     jwt_access_expire_minutes: int = 60 * 24 * 7  # 7일
     jwt_guest_expire_minutes: int = 60 * 24  # 게스트 1일
 
-    # CORS (프론트엔드)
-    cors_origins: str = "http://localhost:3000,https://meat-a-eye.com,https://meat-a-eye.vercel.app"
+    # CORS (프론트엔드) — localhost와 127.0.0.1 둘 다 넣어야 브라우저 접속 시 CORS 통과
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://meat-a-eye.com,https://meat-a-eye.vercel.app"
 
     # AI 서버 (Vision/OCR 중계) — 환경변수 AI_SERVER_URL
     # 예: http://localhost:8001 (Meat_A_Eye-aimodels/ai-server 실행 포트)
