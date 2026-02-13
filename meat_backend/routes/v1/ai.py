@@ -5,7 +5,7 @@ import random
 from datetime import date, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, status, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, status, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -24,6 +24,7 @@ from ...models.saved_recipe import SavedRecipe, RecipeSource
 from ...models.recipe_bookmark import RecipeBookmark
 from ...schemas.ai import AIAnalyzeResponse, AIMode, NutritionInfo, PriceInfo, TraceabilityInfo
 from ...apis import AIProxyService
+from ...apis import get_part_display_name
 from ...services.traceability import fetch_traceability
 from ...services.nutrition_service import NutritionService
 from ...services.price_service import PriceService
@@ -365,14 +366,15 @@ Write the entire response in Korean only, without any English translations."""
         
         # 429 에러 (할당량 초과) 처리
         if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str or "quota" in error_str.lower():
-            error_message = "API 사용량 한도를 초과했습니다. 잠시 후 다시 시도해주세요."
+            raise HTTPException(
+                status_code=429,
+                detail="API 사용량 한도를 초과했습니다. 잠시 후 다시 시도해주세요.",
+            )
         else:
-            # 일반 에러: 간단한 메시지만 추출
-            error_message = "레시피 생성에 실패했습니다. 다시 시도해주세요."
-        
-        return (
-            f"# 레시피 추천\n\n{fallback_meat_str}\n\n{error_message}"
-        )
+            raise HTTPException(
+                status_code=502,
+                detail="레시피 생성에 실패했습니다. 다시 시도해주세요.",
+            )
 
 
 @router.post(
@@ -513,10 +515,11 @@ CRITICAL FORMATTING RULES:
 2. Section headers: Use ONLY Korean - "## 재료", "## 조리 방법", "## 팁" - NOT "재료 (Ingredients)" or "Cooking Steps"
 3. Write ALL content in Korean only - no English translations anywhere
 4. Follow the exact format above with all sections: 재료, 조리 방법, 팁"""
-    fallback = f"부위: {part_name}"
+    display_name = get_part_display_name(part_name) or part_name
+    fallback = f"부위: {display_name}"
     recipe_text = _call_llm_recipe(prompt, fallback)
     if not recipe_text.strip():
-        recipe_text = f"# {part_name} 레시피\n\n부위: {part_name}\n\n레시피를 생성하려면 .env에 GEMINI_API_KEY를 설정해주세요."
+        recipe_text = f"# {display_name} 레시피\n\n부위: {display_name}\n\n레시피를 생성하려면 .env에 GEMINI_API_KEY를 설정해주세요."
     return LLMRecipeResponse(recipe=recipe_text)
 
 
@@ -529,6 +532,7 @@ CRITICAL FORMATTING RULES:
 async def recipe_random(
     db: Annotated[AsyncSession, Depends(get_db)],
     member: Annotated[Member, Depends(get_current_user)],
+    meat_type: str | None = Body(None, embed=True, description="beef 또는 pork 필터"),
 ):
     """냉장고 보관 중인 고기 중 랜덤 1개를 골라 그 부위로 레시피 생성."""
     q = (
@@ -537,11 +541,15 @@ async def recipe_random(
         .where(FridgeItem.status == "stored")
         .options(selectinload(FridgeItem.meat_info))
     )
+    # meat_type 필터 적용
+    if meat_type and meat_type in ("beef", "pork"):
+        q = q.join(FridgeItem.meat_info).where(MeatInfo.category == meat_type)
     result = await db.execute(q)
     items = result.scalars().all()
     if not items:
+        type_label = {"beef": "소고기", "pork": "돼지고기"}.get(meat_type or "", "고기")
         return LLMRecipeResponse(
-            recipe="# 랜덤 레시피\n\n냉장고에 보관 중인 고기가 없습니다. 고기를 추가한 후 다시 시도해주세요."
+            recipe=f"# 랜덤 레시피\n\n냉장고에 보관 중인 {type_label}가 없습니다. 고기를 추가한 후 다시 시도해주세요."
         )
     item = random.choice(items)
     display_name = (item.custom_name or (item.meat_info.part_name if item.meat_info else "고기")).strip() or (item.meat_info.part_name if item.meat_info else "고기")
