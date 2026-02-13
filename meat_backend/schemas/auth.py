@@ -23,6 +23,7 @@ class LoginResponse(BaseModel):
     token: str
     nickname: str
     isGuest: bool = False
+    mustResetPassword: bool = False
 
 
 class GuestRequest(BaseModel):

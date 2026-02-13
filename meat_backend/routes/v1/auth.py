@@ -154,7 +154,12 @@ async def login(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="비밀번호 불일치")
     await db.flush()
     token = create_access_token(member.id, is_guest=False)
-    return LoginResponse(token=token, nickname=member.nickname, isGuest=False)
+    return LoginResponse(
+        token=token,
+        nickname=member.nickname,
+        isGuest=False,
+        mustResetPassword=member.must_reset_password,
+    )
 
 
 @router.post(
@@ -274,6 +279,7 @@ async def password_reset(
 
     # 이메일 발송 성공 후 비밀번호 변경
     member.password = hash_password(temp_pw)
+    member.must_reset_password = True
     await db.flush()
 
     return PasswordResetResponse(
@@ -303,6 +309,7 @@ async def password_change(
         )
 
     member.password = hash_password(body.new_password)
+    member.must_reset_password = False
     await db.flush()
 
     return PasswordChangeResponse(

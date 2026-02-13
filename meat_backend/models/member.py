@@ -16,6 +16,7 @@ class Member(Base):
     web_push_subscription: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_guest: Mapped[bool] = mapped_column(default=False, nullable=False)
     guest_id: Mapped[str | None] = mapped_column(String(36), nullable=True, unique=True)  # UUID
+    must_reset_password: Mapped[bool] = mapped_column(default=False, nullable=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=now_kst)
 
     recognition_logs = relationship("RecognitionLog", back_populates="member", cascade="all, delete-orphan")
