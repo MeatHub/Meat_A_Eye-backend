@@ -124,9 +124,10 @@ async def ai_analyze(
     price_data = None
     if part_name:
         try:
-            price_data = await price_service.fetch_current_price(part_name=part_name, region="seoul", db=db)
+            price_data = await price_service.fetch_current_price(part_name=part_name, region="전국", grade_code="00", db=db)
+            logger.info("가격정보 조회 성공: part=%s, price=%s", part_name, price_data.get("currentPrice") if price_data else None)
         except Exception as e:
-            logger.exception(f"가격정보 API 호출 실패: {e}")
+            logger.warning("가격정보 API 호출 실패 (part=%s): %s", part_name, e)
 
     fridge_item_id = None
     # part_name이 있고 auto_add_fridge가 True면 자동으로 냉장고에 추가 (인식일 +3일)

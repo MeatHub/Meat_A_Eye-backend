@@ -49,3 +49,26 @@ class WebPushSubscribeRequest(BaseModel):
 class WebPushSubscribeResponse(BaseModel):
     success: bool = True
     savedAt: datetime
+
+
+class PasswordResetRequest(BaseModel):
+    """비밀번호 재설정 요청 (임시 비밀번호 이메일 발송)."""
+    email: EmailStr
+
+
+class PasswordResetResponse(BaseModel):
+    """비밀번호 재설정 응답."""
+    success: bool
+    message: str
+
+
+class PasswordChangeRequest(BaseModel):
+    """비밀번호 변경 (로그인 후)."""
+    current_password: str
+    new_password: str = Field(..., min_length=6, max_length=1000)
+
+
+class PasswordChangeResponse(BaseModel):
+    """비밀번호 변경 응답."""
+    success: bool
+    message: str

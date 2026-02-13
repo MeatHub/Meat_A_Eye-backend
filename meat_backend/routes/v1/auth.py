@@ -1,4 +1,6 @@
-"""AUTH-01~04: 회원가입, 로그인, 게스트 체험, 웹 푸시 구독."""
+"""AUTH-01~06: 회원가입, 로그인, 게스트 체험, 웹 푸시 구독, 비밀번호 재설정/변경."""
+import secrets
+import string
 from datetime import datetime
 
 from ...config.timezone import now_kst
@@ -20,6 +22,10 @@ from ...schemas.auth import (
     GuestResponse,
     WebPushSubscribeRequest,
     WebPushSubscribeResponse,
+    PasswordResetRequest,
+    PasswordResetResponse,
+    PasswordChangeRequest,
+    PasswordChangeResponse,
 )
 from ...middleware.jwt import (
     get_current_user,
@@ -27,6 +33,7 @@ from ...middleware.jwt import (
     verify_password,
     create_access_token,
 )
+from ...utils.email import send_temp_password_email
 
 router = APIRouter()
 
@@ -220,3 +227,85 @@ async def web_push_subscribe(
     db.add(sub)
     await db.flush()
     return WebPushSubscribeResponse(success=True, savedAt=now_kst())
+
+
+def _generate_temp_password(length: int = 10) -> str:
+    """영문 대소문자 + 숫자로 구성된 임시 비밀번호 생성."""
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+@router.post(
+    "/password-reset",
+    response_model=PasswordResetResponse,
+    summary="AUTH-05 비밀번호 재설정 (임시 비밀번호 이메일 발송)",
+    responses={
+        404: {"description": "등록되지 않은 이메일"},
+    },
+)
+async def password_reset(
+    body: PasswordResetRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """등록된 이메일로 임시 비밀번호를 발송. 기존 비밀번호는 임시 비밀번호로 교체됨."""
+    result = await db.execute(select(Member).where(Member.email == body.email))
+    member = result.scalar_one_or_none()
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="등록되지 않은 이메일입니다.",
+        )
+    if member.is_guest:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="게스트 계정은 비밀번호 재설정을 할 수 없습니다.",
+        )
+
+    # 임시 비밀번호 생성
+    temp_pw = _generate_temp_password()
+
+    # 이메일 발송을 먼저 시도 (실패 시 비밀번호가 변경되지 않도록)
+    sent = await send_temp_password_email(body.email, temp_pw)
+    if not sent:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="이메일 발송에 실패했습니다. 관리자에게 문의해주세요.",
+        )
+
+    # 이메일 발송 성공 후 비밀번호 변경
+    member.password = hash_password(temp_pw)
+    await db.flush()
+
+    return PasswordResetResponse(
+        success=True,
+        message="임시 비밀번호가 이메일로 발송되었습니다.",
+    )
+
+
+@router.post(
+    "/password-change",
+    response_model=PasswordChangeResponse,
+    summary="AUTH-06 비밀번호 변경 (로그인 후)",
+    responses={
+        401: {"description": "현재 비밀번호 불일치 또는 인증 실패"},
+    },
+)
+async def password_change(
+    body: PasswordChangeRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    member: Annotated[Member, Depends(get_current_user)],
+):
+    """현재 비밀번호 확인 후 새 비밀번호로 변경."""
+    if not verify_password(body.current_password, member.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="현재 비밀번호가 일치하지 않습니다.",
+        )
+
+    member.password = hash_password(body.new_password)
+    await db.flush()
+
+    return PasswordChangeResponse(
+        success=True,
+        message="비밀번호가 성공적으로 변경되었습니다.",
+    )

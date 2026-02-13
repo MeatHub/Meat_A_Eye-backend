@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     # LLM 레시피 (Gemini 전용)
     gemini_api_key: str = ""
 
+    # SMTP (비밀번호 재설정 이메일)
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from_name: str = "Meat-A-Eye"
+
     @property
     def database_url(self) -> str:
         return (

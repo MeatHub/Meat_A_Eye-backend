@@ -32,12 +32,21 @@ class PopularCutsResponse(BaseModel):
     items: List[PopularCutItem]
 
 
+class GradePriceItem(BaseModel):
+    grade: str
+    price: int
+    unit: str = "100g"
+    priceDate: str | None = None
+    trend: str = "flat"
+
+
 class PriceItem(BaseModel):
     partName: str
     category: str  # "beef" | "pork"
     currentPrice: int
     unit: str = "100g"
     priceDate: str | None = None
+    gradePrices: List[GradePriceItem] = []
 
 
 class DashboardPricesResponse(BaseModel):
@@ -206,6 +215,17 @@ async def get_dashboard_prices(
 
     for _code, _name, data in beef_results:
         if data:
+            grade_prices_raw = data.get("gradePrices", [])
+            grade_prices = [
+                GradePriceItem(
+                    grade=gp.get("grade", ""),
+                    price=gp.get("price", 0),
+                    unit=gp.get("unit", "100g"),
+                    priceDate=gp.get("priceDate"),
+                    trend=gp.get("trend", "flat"),
+                )
+                for gp in grade_prices_raw
+            ]
             beef_items.append(
                 PriceItem(
                     partName=_name or _code,
@@ -213,11 +233,23 @@ async def get_dashboard_prices(
                     currentPrice=data["currentPrice"],
                     unit=data.get("unit", "100g"),
                     priceDate=data.get("price_date"),
+                    gradePrices=grade_prices,
                 )
             )
 
     for _code, _name, data in pork_results:
         if data:
+            grade_prices_raw = data.get("gradePrices", [])
+            grade_prices = [
+                GradePriceItem(
+                    grade=gp.get("grade", ""),
+                    price=gp.get("price", 0),
+                    unit=gp.get("unit", "100g"),
+                    priceDate=gp.get("priceDate"),
+                    trend=gp.get("trend", "flat"),
+                )
+                for gp in grade_prices_raw
+            ]
             pork_items.append(
                 PriceItem(
                     partName=_name or _code,
@@ -225,6 +257,7 @@ async def get_dashboard_prices(
                     currentPrice=data["currentPrice"],
                     unit=data.get("unit", "100g"),
                     priceDate=data.get("price_date"),
+                    gradePrices=grade_prices,
                 )
             )
 

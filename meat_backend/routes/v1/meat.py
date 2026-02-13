@@ -139,7 +139,7 @@ async def meat_info(
 )
 async def meat_info_by_part_name(
     part_name: str,
-    region: str = "seoul",
+    region: str = "전국",
     db: Annotated[AsyncSession, Depends(get_db)] = ...,
 ):
     """
