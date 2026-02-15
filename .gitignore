@@ -1,46 +1,14 @@
 # ==============================
-# Python Virtual Environment
+# MeatHub Backend (FastAPI) — .gitignore
 # ==============================
-.venv/
+
+# ── Python 가상환경 ──────────────────────────────────────
 venv/
+.venv/
 **/venv/
 **/.venv/
 
-# ==============================
-# 🔐 Environment Variables & Secrets
-# ==============================
-.env
-.env.*
-*.env
-!.env.example
-
-# API Keys & Credentials
-secrets.json
-credentials.json
-config/secrets.*
-
-# ==============================
-# 🗄️ Database (임시 스크립트)
-# ==============================
-# 마이그레이션 임시 스크립트 (Python)
-migrate_*.py
-check_db*.py
-test_db*.py
-
-# 데이터베이스 백업
-*.sql.backup
-*.sql.bak
-database_backup/
-db_dump/
-
-# ==============================
-# 대용량/외부 데이터 (scripts)
-# ==============================
-scripts/*.json
-
-# ==============================
-# Python Cache
-# ==============================
+# ── Python 캐시 ──────────────────────────────────────────
 __pycache__/
 **/__pycache__/
 *.pyc
@@ -48,37 +16,42 @@ __pycache__/
 *.pyd
 .Python
 
-# ==============================
-# IDE / Editor
-# ==============================
+# ── 환경변수 / 시크릿 ───────────────────────────────────
+.env
+.env.*
+*.env
+!.env.example
+secrets.json
+credentials.json
+config/secrets.*
+
+# ── DB 임시 스크립트 ─────────────────────────────────────
+migrate_*.py
+check_db*.py
+test_db*.py
+*.sql.backup
+*.sql.bak
+database_backup/
+db_dump/
+scripts/*.json
+
+# ── IDE / 에디터 ─────────────────────────────────────────
 .vscode/
-**/.vscode/
 .idea/
-**/.idea/
 *.swp
 *.swo
 *~
 
-# ==============================
-# Temporary / Test Files
-# ==============================
-*.tmp
-*.temp
-*.bak
-*.backup
-tempCodeRunnerFile.py
-
-# ==============================
-# OS Generated
-# ==============================
+# ── OS 파일 ──────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# ==============================
-# Logs
-# ==============================
+# ── 임시 / 백업 / 로그 ──────────────────────────────────
+*.tmp
+*.temp
+*.bak
+*.backup
 *.log
 logs/
-
-sql/
+tempCodeRunnerFile.py
